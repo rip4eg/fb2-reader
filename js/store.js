@@ -138,6 +138,9 @@ export class Store extends EventTarget {
     this.offline = false;
     this.lastSyncAt = 0;
     this.pushTimer = null;
+    this.pushDelayMs = 12000; // как часто позиция уходит в репозиторий при непрерывном чтении
+    this._pushing = null;
+    this._queued = false;
     this.dirty = false;
   }
 
@@ -202,8 +205,18 @@ export class Store extends EventTarget {
       if (!this.remote.has(did)) {
         this.remote.set(did, { deviceId: did, deviceName: this.device.name, updatedAt: new Date().toISOString(), books: {} });
       }
-      this.me = this.remote.get(did);
-      if (!this.me.books) this.me.books = {};
+      const fetched = this.remote.get(did);
+      if (!fetched.books) fetched.books = {};
+      // Не теряем записи, сделанные во время сетевых запросов: файл из репозитория
+      // может оказаться старее того, что уже лежит в памяти.
+      const prev = this.me;
+      if (prev && prev !== fetched) {
+        for (const [bookId, rec] of Object.entries(prev.books || {})) {
+          const cur = fetched.books[bookId];
+          if (!cur || String(rec.at || '') > String(cur.at || '')) fetched.books[bookId] = rec;
+        }
+      }
+      this.me = fetched;
 
       // локальный кэш библиотеки — на случай офлайна
       idb.put('cache:library', JSON.stringify(this.library), 'kv').catch(() => {});
@@ -262,6 +275,14 @@ export class Store extends EventTarget {
     return best ? best.id : null;
   }
 
+  /**
+   * Записывает позицию в память и планирует отправку.
+   *
+   * Таймер намеренно НЕ переносится при каждом изменении. Если его переносить,
+   * то при непрерывном чтении (событие прокрутки приходит чаще, чем задержка)
+   * отправка не случилась бы никогда — позиция уходила бы в репозиторий только
+   * после паузы, а при закрытии вкладки терялась бы.
+   */
   async setProgress(bookId, anchor, pct, { immediate = false } = {}) {
     if (!this.me) return;
     this.me.books[bookId] = { a: anchor, pct: Math.max(0, Math.min(1, pct || 0)), at: new Date().toISOString() };
@@ -269,13 +290,27 @@ export class Store extends EventTarget {
     this.dirty = true;
     this.emit('progress', { bookId });
     if (immediate) return await this.flushProgress();
-    clearTimeout(this.pushTimer);
-    this.pushTimer = setTimeout(() => this.flushProgress().catch(() => {}), 15000);
+    if (this.pushTimer) return; // отправка уже запланирована — не откладываем её
+    this.pushTimer = setTimeout(() => {
+      this.pushTimer = null;
+      this.flushProgress().catch(() => {});
+    }, this.pushDelayMs);
   }
 
+  /** Отправка не может идти параллельно сама с собой — иначе теряются записи. */
   async flushProgress() {
     if (!this.me) return;
     clearTimeout(this.pushTimer);
+    this.pushTimer = null;
+    if (this._pushing) { this._queued = true; return this._pushing; }
+    this._pushing = this.#flushOnce().finally(() => {
+      this._pushing = null;
+      if (this._queued) { this._queued = false; this.flushProgress().catch(() => {}); }
+    });
+    return this._pushing;
+  }
+
+  async #flushOnce() {
     const did = this.device.id;
     this.me.deviceId = did;
     this.me.deviceName = this.device.name;

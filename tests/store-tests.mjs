@@ -2,6 +2,7 @@
 // Запуск: node tests/store-tests.mjs
 
 import { readFile } from 'node:fs/promises';
+import { writeSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, isAbsolute, join } from 'node:path';
 import { MockGitHub } from './mock-github.mjs';
@@ -169,7 +170,32 @@ eq('название изменено', s1.library.books[0].title, 'Новое �
 await s2.refresh();
 eq('изменение видно на втором устройстве', s2.library.books[0].title, 'Новое название');
 
-// ---------- ошибки ----------
+// ---------- сохранение во время чтения (регрессия: таймер переносился при каждом изменении) ----------
+{
+  store.setItem('fbr.device.v1', JSON.stringify({ id: 'dev-reading', name: 'Читаю непрерывно' }));
+  const s = new Store();
+  s.pushDelayMs = 200; // ускоряем для теста: задержка отправки
+  await s.connect(cfg);
+  await s.refresh();
+  const b = s.library.books[0];
+
+  let savedWhileReading = false;
+  for (let i = 0; i < 40; i++) {
+    await s.setProgress(b.id, { i: 100 + i * 5, o: 0.5 }, 0.1 + i / 100);
+    await new Promise((r) => setTimeout(r, 40));
+    if (!savedWhileReading && mock.files.has('progress/dev-reading.json')) savedWhileReading = true;
+  }
+  ok('позиция уходит в репозиторий во время чтения, а не только после остановки', savedWhileReading);
+  const rawReading = mock.files.get('progress/dev-reading.json');
+  const saved = rawReading ? JSON.parse(Buffer.from(rawReading, 'base64').toString('utf8')) : null;
+  ok('сохранённая позиция не «нулевая»', !!(saved && saved.books[b.id] && saved.books[b.id].a.i > 100), saved ? JSON.stringify(saved.books[b.id]) : 'файл прогресса не создан');
+
+  // обновление из репозитория не должно затирать несохранённые записи
+  await s.setProgress(b.id, { i: 7777, o: 0.9 }, 0.8);
+  const before = s.me.books[b.id] ? s.me.books[b.id].a.i : null;
+  await s.refresh();
+  eq('несохранённая позиция переживает обновление из репозитория', s.me.books[b.id] && s.me.books[b.id].a.i, before);
+}
 mock.denied = true;
 const s3 = new Store();
 store.setItem('fbr.device.v1', JSON.stringify({ id: 'dev3', name: 'Планшет' }));
@@ -181,11 +207,15 @@ mock.denied = false;
 // ---------- итог ----------
 function finish() {
   let failed = 0;
+  const out = [];
   for (const l of lines) {
     if (!l.pass) failed++;
-    console.log(`${l.pass ? 'PASS' : 'FAIL'} | ${l.name}${l.extra && !l.pass ? ' | ' + l.extra : ''}`);
+    out.push(`${l.pass ? 'PASS' : 'FAIL'} | ${l.name}${l.extra && !l.pass ? ' | ' + l.extra : ''}`);
   }
-  console.log(failed === 0 ? `\nВСЕ ТЕСТЫ ХРАНИЛИЩА ПРОЙДЕНЫ (${lines.length})` : `\nПРОВАЛЕНО: ${failed} из ${lines.length}`);
+  out.push(failed === 0 ? `\nВСЕ ТЕСТЫ ХРАНИЛИЩА ПРОЙДЕНЫ (${lines.length})` : `\nПРОВАЛЕНО: ${failed} из ${lines.length}`);
+  const text = out.join('\n') + '\n';
+  // пишем синхронно: при перенаправлении вывода process.exit() теряет незаписанное
+  try { writeSync(1, text); } catch { console.log(text); }
   process.exit(failed === 0 ? 0 : 1);
 }
 

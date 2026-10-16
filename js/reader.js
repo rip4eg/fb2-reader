@@ -47,15 +47,34 @@ export class Reader {
       h('button.btn.ghost.icon', { title: 'Настройки текста', onclick: () => this.openSettings() }, 'Aa'),
     );
 
+    this.saveLabel = h('span.hint', { style: { whiteSpace: 'nowrap', minWidth: '6.5em', textAlign: 'right' } }, '');
     this.foot = h('div.reader-foot',
       this.pctLabel,
       h('div.bar', this.barFill),
-      h('button.btn.ghost.sm', { title: 'Синхронизировать', onclick: () => this.syncNow() }, '⟳'),
+      this.saveLabel,
+      h('button.btn.ghost.sm', { title: 'Сохранить сейчас', onclick: () => this.syncNow() }, '⟳'),
     );
 
     this.root = h('div.reader', this.bar, this.scroll, this.foot, this.notesHost);
 
+    if (!this._statusHooked) {
+      this._statusHooked = true;
+      const refresh = () => { if (this.bookId) this.setSync(); };
+      this.store.addEventListener('status', refresh);
+      this.store.addEventListener('change', refresh);
+      this.store.addEventListener('progress', refresh);
+    }
+
     this.scroll.addEventListener('scroll', () => {
+      // Отличаем собственную программную прокрутку (восстановление позиции)
+      // от прокрутки пользователем: после первой пользовательской прокрутки
+      // восстановление больше не вмешивается, иначе читалку отбрасывало бы назад.
+      const st = this.scroll.scrollTop;
+      if (this._expectTop != null && Math.abs(st - this._expectTop) <= 2) {
+        // это наша прокрутка
+      } else {
+        this.userScrolled = true;
+      }
       this.updatePct();
       this.savePos();
       this.maybeHideBars();
@@ -131,7 +150,11 @@ export class Reader {
 
     const rec = this.store.progressFor(bookId);
     const start = rec && rec.a ? rec.a : { i: 0, o: 0 };
-    await this.afterLayout(() => this.applyAnchor(start), 900);
+    this.restoreAnchor = start;
+    this.userScrolled = false;
+    this._expectTop = null;
+    this.restoreUntil = Date.now() + 5000; // пока пользователь не тронул прокрутку, доводим позицию
+    await this.afterLayout(() => this.applyAnchor(this.restoreAnchor), 1200);
     this.updatePct();
     this.setSync();
   }
@@ -191,12 +214,16 @@ export class Reader {
     return findAnchor(this.scroll, this.blocks, PAGE_PAD);
   }
 
-  applyAnchor(a) {
+  applyAnchor(a, force = false) {
     if (!this.blocks.length) return;
+    // Пока пользователь не начал листать сам и не вышло время — доводим позицию
+    // (вёрстка «съезжает», пока грузятся картинки и шрифты).
+    if (!force && (this.userScrolled || Date.now() > this.restoreUntil)) return;
     if (!scrollToAnchor(this.scroll, this.blocks, a, PAGE_PAD)) {
       // книга изменилась — грузим по проценту
       this.scroll.scrollTop = (a.pct || 0) * this.scroll.scrollHeight;
     }
+    this._expectTop = this.scroll.scrollTop;
   }
 
   setPct(p) {
@@ -368,7 +395,7 @@ export class Reader {
     this.page.classList.toggle('no-hyphens', !prefs.hyphens);
     // после смены шрифта позицию сохраняем
     const a = this.blocks.length ? this.anchorAt() : null;
-    if (a) this.afterLayout(() => this.applyAnchor(a), 400);
+    if (a) this.afterLayout(() => this.applyAnchor(a, true), 400);
   }
 
   // ------------------------------------------------------------- синхронизация
@@ -376,11 +403,19 @@ export class Reader {
   setSync() {
     const s = this.store.status;
     this.syncDot.className = 'sync-dot' + (s === 'busy' ? ' busy' : s === 'err' ? ' err' : s === 'idle' ? '' : ' ok');
-    this.syncDot.title =
-      s === 'busy' ? 'Сохранение…' :
-      s === 'err' ? 'Ошибка синхронизации: ' + (this.store.error ? this.store.error.message : '') :
-      this.store.offline ? 'Офлайн-режим (показан кэш)' :
+    const where =
+      s === 'busy' ? 'Сохраняю…' :
+      s === 'err' ? 'Не сохранено: ' + (this.store.error ? this.store.error.message : 'ошибка') :
+      this.store.offline ? 'Офлайн, показан кэш' :
       'Сохранено ' + new Date(this.store.lastSyncAt || Date.now()).toLocaleTimeString('ru-RU');
+    this.syncDot.title = where;
+    if (this.saveLabel) {
+      this.saveLabel.textContent =
+        s === 'busy' ? 'сохраняю…' :
+        s === 'err' ? 'не сохранено' :
+        this.store.dirty ? 'есть несохранённое' :
+        'сохранено';
+    }
   }
 
   async syncNow() {
@@ -408,7 +443,7 @@ export class Reader {
       ms: 12000,
       action: {
         label: 'Перейти',
-        fn: () => { this.applyAnchor(rec.a || { pct: rec.pct }); this.updatePct(); },
+        fn: () => { this.applyAnchor(rec.a || { pct: rec.pct }, true); this.updatePct(); },
       },
     });
   }
