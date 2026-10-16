@@ -1,0 +1,13 @@
+{
+  "name": "Читалка FB2",
+  "short_name": "FB2",
+  "description": "Читалка FB2 с синхронизацией позиции чтения через GitHub",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4ecd8",
+  "theme_color": "#b8860b",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

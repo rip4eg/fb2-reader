@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Тесты читалки</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; padding: 1rem; }
+  #out { background: #111; color: #ddd; padding: 1rem; white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+  .PASS { color: #4ade80; } .FAIL { color: #f87171; }
+  #scroll { height: 300px; overflow: auto; border: 1px solid #ccc; width: 640px; margin-top: 1rem; }
+  #page { padding: 0 12px; font-family: Georgia, serif; font-size: 18px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<h1>Тесты</h1>
+<div id="scroll"><div id="page" class="fb2-body"></div></div>
+<pre id="out">выполняется…</pre>
+
+<script type="module">
+import { runSuite } from './suite.js';
+
+const lines = [];
+let fails = 0;
+const dump = () => {
+  document.getElementById('out').innerHTML = lines.join('\n');
+  document.title = fails === 0 ? 'TESTS-OK' : 'TESTS-FAIL:' + fails;
+};
+const note = (pass, name, extra) => {
+  if (!pass) fails++;
+  lines.push(`<span class="${pass ? 'PASS' : 'FAIL'}">${pass ? 'PASS' : 'FAIL'}</span> | ${name}${extra ? ' | ' + extra : ''}`);
+};
+
+window.addEventListener('error', (e) => { note(false, 'CRASH: ' + e.message); dump(); });
+window.addEventListener('unhandledrejection', (e) => { note(false, 'REJECT: ' + (e.reason && e.reason.message || e.reason)); dump(); });
+
+try {
+  const res = await runSuite({
+    readBytes: async (p) => await (await fetch(p)).arrayBuffer(),
+    readText: async (p) => await (await fetch(p)).text(),
+    prepareLayout: async (scroll, page, blocks) => ({
+      async setFontScale(k) { page.style.fontSize = Math.round(18 * k) + 'px'; await new Promise((r) => requestAnimationFrame(() => r())); },
+    }),
+  });
+  for (const l of res.lines) note(l.pass, l.name, l.extra);
+  fails = res.fails;
+} catch (e) {
+  note(false, 'CRASH: ' + (e && e.stack || e));
+  fails++;
+}
+dump();
+</script>
+</body>
+</html>
