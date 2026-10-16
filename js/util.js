@@ -255,7 +255,11 @@ function tx(store, mode, fn) {
     const s = t.objectStore(store);
     let out;
     try { out = fn(s); } catch (e) { reject(e); return; }
-    t.oncomplete = () => resolve(out && out.result !== undefined ? out.result : out);
+    // IDBRequest узнаём по readyState. Различать обязательно: при промахе кэша
+    // result равен undefined, и если вернуть сам запрос, вызывающий код примет
+    // его за найденное значение (и вместо файла получит объект запроса).
+    const isRequest = !!out && typeof out === 'object' && 'readyState' in out && 'result' in out;
+    t.oncomplete = () => resolve(isRequest ? out.result : out);
     t.onerror = () => reject(t.error);
     t.onabort = () => reject(t.error);
   }));
