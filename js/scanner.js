@@ -140,8 +140,7 @@ export async function walkDirectory(dir, prefix, acc, depth = 0) {
  * Сканирует источник.
  * source: {kind:'handle', handle, name} | {kind:'files', files, name}
  */
-export async function scanSource(source, onProgress = () => {}) {
-  const acc = { seen: 0, entries: [], onProgress };
+export async function scanSource(source, onProgress = () => {}) {  const acc = { seen: 0, entries: [], onProgress };
   if (source.kind === 'files') {
     for (const file of source.files) {
       acc.seen++;
@@ -151,6 +150,62 @@ export async function scanSource(source, onProgress = () => {}) {
     }
   } else {
     await walkDirectory(source.handle, '', acc, 0);
+  }
+  onProgress({ seen: acc.seen, found: acc.entries.length, done: true });
+  acc.entries.sort((a, b) => a.path.localeCompare(b.path, 'ru'));
+  return { entries: acc.entries, seen: acc.seen };
+}
+
+// ------------------------------------------------------------ перетаскивание
+
+function entryFile(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+/** Рекурсивный обход FileSystemEntry (папка или файл, перетащенные в окно). */
+export async function walkEntry(entry, prefix, acc, depth = 0) {
+  if (depth > MAX_DEPTH) return acc;
+  if (entry.isFile) {
+    acc.seen++;
+    if (!isCandidateName(entry.name)) return acc;
+    try {
+      const file = await entryFile(entry);
+      acc.entries.push({ file, path: prefix + entry.name, name: entry.name, size: file.size });
+    } catch { /* файл не читается */ }
+    return acc;
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    for (;;) {
+      // readEntries отдаёт порциями (обычно по 100), поэтому читаем до пустого
+      const batch = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      if (!batch || !batch.length) break;
+      for (const child of batch) await walkEntry(child, prefix + entry.name + '/', acc, depth + 1);
+      if (acc.onProgress) acc.onProgress({ seen: acc.seen, found: acc.entries.length });
+    }
+  }
+  return acc;
+}
+
+/**
+ * Сканирует то, что перетащили в окно (папку или файлы).
+ * Работает без всяких разрешений — файлы уже даны пользователем.
+ */
+export async function scanDataTransfer(dt, onProgress = () => {}) {
+  const acc = { seen: 0, entries: [], onProgress };
+  const items = Array.from((dt && dt.items) || []);
+  const entries = items
+    .map((i) => (typeof i.webkitGetAsEntry === 'function' ? i.webkitGetAsEntry() : null))
+    .filter(Boolean);
+
+  if (entries.length) {
+    for (const entry of entries) await walkEntry(entry, '', acc, 0);
+  } else {
+    for (const file of Array.from((dt && dt.files) || [])) {
+      acc.seen++;
+      if (!isCandidateName(file.name)) continue;
+      acc.entries.push({ file, path: file.webkitRelativePath || file.name, name: file.name, size: file.size });
+    }
   }
   onProgress({ seen: acc.seen, found: acc.entries.length, done: true });
   acc.entries.sort((a, b) => a.path.localeCompare(b.path, 'ru'));

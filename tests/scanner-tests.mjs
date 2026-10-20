@@ -9,7 +9,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 const {
   isCandidateName, isBookName, isZipName, metaFromText, peekMeta,
-  walkDirectory, scanSource, markExisting, mapLimit, scanArchive,
+  walkDirectory, scanSource, markExisting, mapLimit, scanArchive, scanDataTransfer,
 } = await import('../js/scanner.js');
 
 const lines = [];
@@ -167,6 +167,52 @@ function dirHandle(name, children) {
   let threw = null;
   try { await scanArchive(new File([new TextEncoder().encode('не архив')], 'fake.zip')); } catch (e) { threw = e; }
   ok('архив: недопустимый файл отклонён', !!threw && /ZIP/i.test(threw.message), threw && threw.message);
+}
+
+// ---------- перетаскивание папки в окно ----------
+{
+  const mkFileEntry = (name, data) => ({
+    isFile: true,
+    isDirectory: false,
+    name,
+    file(cb) { cb(new File([data], name)); },
+  });
+  const mkDirEntry = (name, children) => ({
+    isFile: false,
+    isDirectory: true,
+    name,
+    createReader() {
+      let call = 0;
+      return {
+        readEntries(cb) {
+          // как в браузере: сначала порция, потом пусто
+          const batch = call === 0 ? children : [];
+          call++;
+          cb(batch);
+        },
+      };
+    },
+  });
+
+  const root = mkDirEntry('books', [
+    mkFileEntry('Первая.fb2', fb2Bytes),
+    mkFileEntry('заметки.txt', new Uint8Array([1])),
+    mkDirEntry('вложенная', [
+      mkFileEntry('Вторая.fb2', fb2Bytes),
+      mkDirEntry('глубоко', [mkFileEntry('Третья.fb2', fb2Bytes)]),
+    ]),
+  ]);
+
+  const res = await scanDataTransfer({ items: [{ webkitGetAsEntry: () => root }], files: [] });
+  eq('перетаскивание: найдено 3 книги', res.entries.length, 3);
+  ok('перетаскивание: путь от имени папки', res.entries.some((e) => e.path === 'books/вложенная/глубоко/Третья.fb2'),
+    res.entries.map((e) => e.path).join(' | '));
+  ok('перетаскивание: .txt отброшен', !res.entries.some((e) => /\.txt$/.test(e.name)));
+
+  // браузер без webkitGetAsEntry — работаем через dt.files
+  const plain = await scanDataTransfer({ items: [], files: [new File([fb2Bytes], 'x.fb2'), new File([new Uint8Array([1])], 'y.txt')] });
+  eq('перетаскивание файлов без entries', plain.entries.length, 1);
+  eq('перетаскивание файлов: имя сохранено', plain.entries[0].name, 'x.fb2');
 }
 
 // ---------- итог ----------

@@ -3,7 +3,7 @@
 import { h, mount, toast, confirmDlg, promptDlg, modal, backdrop, fmtBytes, fmtAgo, initials, escapeHtml } from './util.js';
 import { openFb2Buffer } from './fb2.js';
 import {
-  pickFolder, pickFiles, pickArchives, scanSource, scanArchive, peekMeta, markExisting, mapLimit,
+  pickFolder, pickFiles, pickArchives, scanSource, scanArchive, scanDataTransfer, peekMeta, markExisting, mapLimit,
   rememberFolder, rememberedFolder, requestFolderPermission, folderPickerAvailable, browserCapabilities,
 } from './scanner.js';
 
@@ -425,6 +425,28 @@ export class Library {
       );
     };
 
+    /** Общая часть: метаданные найденных файлов и пометка «уже есть». */
+    const finishScan = async (res, isFolder, label) => {
+      folderIgnored = !isFolder;
+      lastPick = label;
+      if (!res.entries.length) {
+        status.textContent = isFolder
+          ? 'В этой папке нет файлов .fb2 или .fb2.zip (включая вложенные папки).'
+          : `Просмотрено файлов: ${res.seen}, но среди них нет .fb2 или .fb2.zip.`;
+        return;
+      }
+      status.textContent = `Читаю названия: 0 из ${res.entries.length}`;
+      const withMeta = await mapLimit(res.entries, 4, async (e) => ({ ...e, meta: await peekMeta(e.file) }), (n, total) => {
+        status.textContent = `Читаю названия: ${n} из ${total}`;
+      });
+      entries = markExisting(withMeta, this.store.library.books);
+      chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path));
+      const bad = entries.filter((e) => !e.meta.ok).length;
+      status.textContent = `Найдено книг: ${entries.length}` +
+        (res.seen > entries.length ? ` из ${res.seen} просмотренных файлов` : '') +
+        (bad ? ` · не удалось прочитать: ${bad}` : '');
+    };
+
     const runScan = async (source) => {
       if (!source || scanning) return;
       scanning = true;
@@ -432,7 +454,7 @@ export class Library {
       chosen.clear();
       // Браузер мог проигнорировать «папку» и вернуть просто файлы — это важно показать.
       const rootFolder = (source.files || []).map((f) => String(f.webkitRelativePath || '')).find(Boolean);
-      folderIgnored = source.kind !== 'handle' && !rootFolder;
+      const isFolder = source.kind === 'handle' || !!rootFolder;
       lastPick = source.kind === 'handle'
         ? `папка «${source.name}»`
         : (rootFolder ? `папка «${rootFolder.split('/')[0]}», файлов ${source.files.length}` : `${source.files.length} файлов без папки`);
@@ -442,28 +464,33 @@ export class Library {
         const res = await scanSource(source, ({ seen, found }) => {
           status.textContent = `Просмотрено файлов: ${seen}, найдено книг: ${found}`;
         });
-        if (!res.entries.length) {
-          status.textContent = folderIgnored
-            ? `Выбрано файлов: ${res.seen}, но среди них нет .fb2 или .fb2.zip.`
-            : 'В этой папке нет файлов .fb2 или .fb2.zip (включая вложенные папки).';
-          return;
-        }
-        status.textContent = `Читаю названия: 0 из ${res.entries.length}`;
-        const withMeta = await mapLimit(res.entries, 4, async (e) => ({ ...e, meta: await peekMeta(e.file) }), (n, total) => {
-          status.textContent = `Читаю названия: ${n} из ${total}`;
-        });
-        entries = markExisting(withMeta, this.store.library.books);
-        chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path));
+        await finishScan(res, isFolder, lastPick);
         if (source.kind === 'handle') {
           rememberFolder(source.handle).catch(() => {});
           remembered = source.handle;
         }
-        const bad = entries.filter((e) => !e.meta.ok).length;
-        status.textContent = `Найдено книг: ${entries.length}` +
-          (res.seen > entries.length ? ` из ${res.seen} просмотренных файлов` : '') +
-          (bad ? ` · не удалось прочитать: ${bad}` : '');
       } catch (err) {
         status.textContent = 'Не удалось просмотреть папку: ' + ((err && err.message) || err);
+      } finally {
+        scanning = false;
+        render();
+      }
+    };
+
+    const runDrop = async (dt) => {
+      if (scanning) return;
+      scanning = true;
+      entries = [];
+      chosen.clear();
+      status.textContent = 'Смотрю, что перетащили…';
+      render();
+      try {
+        const res = await scanDataTransfer(dt, ({ seen, found }) => {
+          status.textContent = `Просмотрено файлов: ${seen}, найдено книг: ${found}`;
+        });
+        await finishScan(res, true, `перетащено: ${res.seen} файлов`);
+      } catch (err) {
+        status.textContent = 'Не удалось прочитать перетащенное: ' + ((err && err.message) || err);
       } finally {
         scanning = false;
         render();
@@ -510,6 +537,22 @@ export class Library {
     };
 
     const render = () => {
+      const dropZone = h('div.drop-zone',
+        h('div.dz-t', 'Перетащите сюда папку с книгами'),
+        h('div.hint', 'Из Проводника — читалка сама обойдёт её и все вложенные папки. Можно перетащить и отдельные файлы.'),
+      );
+      dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+        dropZone.classList.add('over');
+      });
+      dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+      dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('over');
+        if (e.dataTransfer) runDrop(e.dataTransfer);
+      });
+
       dialog.replaceChildren(
         h('div.row', { style: { alignItems: 'center' } },
           h('h3', { style: { flex: '1 1 auto', margin: 0 } }, 'Импорт из папки'),
@@ -524,8 +567,9 @@ export class Library {
                 const src = await pickFolder();
                 if (src) runScan(src);
               } catch (e) {
-                status.textContent = e.message;
-                toast(e.message, { error: true, ms: 12000 });
+                const detail = e && e.name && e.name !== 'Error' ? ` (${e.name})` : '';
+                status.textContent = (e.message || 'Не удалось открыть папку') + detail;
+                toast('Выбор папки не удался. Перетащите папку в окно — этот способ работает всегда.', { error: true, ms: 14000 });
               }
             },
           }, 'Выбрать папку'),
@@ -553,6 +597,8 @@ export class Library {
             },
           }, `↻ ${remembered.name}`) : null,
         ),
+        h('p.hint', 'В диалоге выбора откройте папку с книгами и нажмите внизу «Выбрать папку» — одного двойного щелчка по папке недостаточно.'),
+        dropZone,
         folderPickerAvailable()
           ? h('p.hint', 'Если браузер спросит про доступ к файлам — нажмите «Разрешить». Папка запомнится, и в следующий раз хватит кнопки с её именем.')
           : h('p.hint', caps.android

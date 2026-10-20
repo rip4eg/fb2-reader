@@ -281,6 +281,16 @@ label.field > span { display: block; font-size: .85rem; color: var(--muted); mar
 .scan-row.bad .t { color: var(--muted); text-decoration: line-through; }
 .scan-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .8rem; }
 
+.drop-zone {
+  margin: .3rem 0 .2rem; padding: .9rem 1rem; text-align: center;
+  border: 2px dashed var(--border); border-radius: 12px;
+  background: var(--bg-soft); color: var(--fg);
+  transition: border-color .15s, background .15s;
+}
+.drop-zone.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.drop-zone .dz-t { font-weight: 600; font-size: .9rem; margin-bottom: .25rem; }
+.drop-zone .hint { margin: 0; }
+
 /* ============ Оглавление ============ */
 .toc-panel {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(24rem, 88vw); z-index: 95;
