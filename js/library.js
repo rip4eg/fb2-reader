@@ -3,7 +3,7 @@
 import { h, mount, toast, confirmDlg, promptDlg, modal, backdrop, fmtBytes, fmtAgo, initials, escapeHtml } from './util.js';
 import { openFb2Buffer } from './fb2.js';
 import {
-  pickFolder, pickFiles, scanSource, peekMeta, markExisting, mapLimit,
+  pickFolder, pickFiles, pickArchives, scanSource, scanArchive, peekMeta, markExisting, mapLimit,
   rememberFolder, rememberedFolder, requestFolderPermission, folderPickerAvailable,
 } from './scanner.js';
 
@@ -455,34 +455,92 @@ export class Library {
       }
     };
 
+    const runArchive = async () => {
+      if (scanning) return;
+      let files;
+      try {
+        files = await pickArchives();
+      } catch (e) {
+        status.textContent = 'Не удалось открыть выбор архива: ' + e.message;
+        return;
+      }
+      if (!files) return;
+      scanning = true;
+      entries = [];
+      chosen.clear();
+      status.textContent = 'Читаю архив…';
+      render();
+      try {
+        let all = [];
+        for (const f of files) {
+          status.textContent = `Читаю архив: ${f.name}`;
+          const res = await scanArchive(f, ({ done, total }) => {
+            status.textContent = `Распаковываю ${f.name}: ${done} из ${total}`;
+          });
+          all = all.concat(res.entries);
+        }
+        if (!all.length) {
+          status.textContent = 'В архиве не нашлось файлов .fb2';
+          return;
+        }
+        entries = markExisting(all, this.store.library.books);
+        chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path));
+        status.textContent = `В архиве найдено книг: ${entries.length}`;
+      } catch (err) {
+        status.textContent = 'Не удалось прочитать архив: ' + ((err && err.message) || err);
+      } finally {
+        scanning = false;
+        render();
+      }
+    };
+
     const render = () => {
       dialog.replaceChildren(
         h('div.row', { style: { alignItems: 'center' } },
           h('h3', { style: { flex: '1 1 auto', margin: 0 } }, 'Импорт из папки'),
           h('button.btn.ghost.icon', { onclick: close, 'aria-label': 'Закрыть' }, '✕')),
-        h('p.hint', 'Выберите папку с книгами: читалка найдёт в ней и во вложенных папках файлы ',
-          h('code.mono', '.fb2'), ' и ', h('code.mono', '.fb2.zip'),
-          '. В библиотеку ничего не уйдёт, пока вы не отметите книги и не нажмёте «Добавить».'),
+        h('p.hint', 'Читалка найдёт файлы ', h('code.mono', '.fb2'), ' и ', h('code.mono', '.fb2.zip'),
+          ' и покажет их список. В библиотеку ничего не уйдёт, пока вы не отметите книги и не нажмёте «Добавить».'),
         h('div.row',
           h('button.btn.primary', {
             disabled: scanning,
-            onclick: async () => { try { const src = await pickFolder(); if (src) runScan(src); } catch (e) { status.textContent = 'Не удалось открыть выбор папки: ' + e.message; } },
+            onclick: async () => {
+              try {
+                const src = await pickFolder();
+                if (src) runScan(src);
+              } catch (e) {
+                status.textContent = e.message;
+                toast(e.message, { error: true, ms: 12000 });
+              }
+            },
           }, 'Выбрать папку'),
           h('button.btn', {
             disabled: scanning,
-            onclick: async () => { try { const src = await pickFiles(); if (src) runScan(src); } catch (e) { status.textContent = 'Не удалось открыть выбор файлов: ' + e.message; } },
+            onclick: async () => {
+              try {
+                const src = await pickFiles();
+                if (src) runScan(src);
+              } catch (e) { status.textContent = 'Не удалось открыть выбор файлов: ' + e.message; }
+            },
           }, 'Выбрать файлы'),
+          h('button.btn', {
+            disabled: scanning,
+            onclick: runArchive,
+          }, 'Из ZIP-архива'),
           remembered && !scanning ? h('button.btn.ghost', {
             onclick: async () => {
               const perm = await requestFolderPermission(remembered);
-              if (perm !== 'granted') { toast('Браузер не дал доступ к папке — выберите её заново', { error: true }); return; }
+              if (perm !== 'granted') {
+                toast('Доступ к папке не подтверждён. Сбросьте разрешение сайта (значок слева от адреса → «Разрешения» → доступ к файлам) и выберите папку заново.', { error: true, ms: 14000 });
+                return;
+              }
               runScan({ kind: 'handle', handle: remembered, name: remembered.name });
             },
           }, `↻ ${remembered.name}`) : null,
         ),
         folderPickerAvailable()
-          ? null
-          : h('p.hint', 'Этот браузер не умеет открывать папку целиком (на Android так бывает часто). Выберите файлы кнопкой «Выбрать файлы» — или откройте читалку в Chrome на компьютере.'),
+          ? h('p.hint', 'Если браузер спросит про доступ к файлам — нажмите «Разрешить». Папка запомнится, и в следующий раз хватит кнопки с её именем.')
+          : h('p.hint', 'В этом браузере нельзя открыть папку целиком — в Chrome на Android такого выбора нет, поэтому система и не показывает запрос доступа. Работают два пути: «Выбрать файлы» (можно отметить сразу много) или сложить папку в ZIP-архив и нажать «Из ZIP-архива».'),
         status,
         entries.length ? list : null,
         entries.length ? footer : null,

@@ -3,7 +3,7 @@
 // с откатом на <input webkitdirectory> и обычный выбор файлов.
 
 import { decodeXmlBuffer } from './fb2.js';
-import { isZip, unzipFirstFb2 } from './zip.js';
+import { isZip, zipEntries, zipExtract, unzipFirstFb2 } from './zip.js';
 import { idb } from './util.js';
 
 export const HEAD_BYTES = 128 * 1024;      // столько читаем для метаданных
@@ -163,28 +163,46 @@ export function folderPickerAvailable() {
   return typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 }
 
-function pickWithInput(directory) {
+/** Есть ли хоть какой-то способ получить папку (системный диалог или webkitdirectory). */
+export function directoryInputSupported() {
+  if (typeof document === 'undefined') return false;
+  return folderPickerAvailable() || 'webkitdirectory' in document.createElement('input');
+}
+
+function pickWithInput(directory, accept) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.accept = '.fb2,.zip,.fb2.zip,application/xml,text/xml,application/zip';
+    input.accept = accept || '.fb2,.zip,.fb2.zip,application/xml,text/xml,application/zip';
     input.style.display = 'none';
     if (directory) input.setAttribute('webkitdirectory', '');
     document.body.append(input);
 
     let settled = false;
+    let focusTimer = 0;
+    const cleanup = () => { clearTimeout(focusTimer); input.remove(); };
     const finish = (value) => {
       if (settled) return;
       settled = true;
-      input.remove();
+      cleanup();
       resolve(value);
     };
+
     input.addEventListener('change', () => finish(Array.from(input.files || [])));
     input.addEventListener('cancel', () => finish(null));
-    window.addEventListener('focus', () => {
-      setTimeout(() => { if (!input.files || !input.files.length) finish(null); }, 600);
-    }, { once: true });
+
+    // Часть браузеров не присылает cancel: после возврата фокуса и паузы
+    // считаем, что выбор отменён. Задержка нужна, чтобы не оборвать
+    // выбор, который ещё продолжается.
+    const onFocus = () => {
+      if (settled) return;
+      focusTimer = setTimeout(() => {
+        if (!settled && (!input.files || !input.files.length)) finish(null);
+      }, 1500);
+    };
+    window.addEventListener('focus', onFocus, { once: true });
+
     input.click();
   });
 }
@@ -194,10 +212,24 @@ export async function pickFolder() {
   if (folderPickerAvailable()) {
     try {
       const handle = await window.showDirectoryPicker({ id: 'fb2-books', mode: 'read' });
-      return { kind: 'handle', handle, name: handle.name };
+      if (handle) {
+        // явно подтверждаем доступ: браузер может показать свой запрос
+        if (typeof handle.queryPermission === 'function') {
+          const state = await handle.queryPermission({ mode: 'read' }).catch(() => 'granted');
+          if (state === 'prompt' && typeof handle.requestPermission === 'function') {
+            const granted = await handle.requestPermission({ mode: 'read' }).catch(() => 'denied');
+            if (granted !== 'granted') throw permissionError();
+          } else if (state === 'denied') {
+            throw permissionError();
+          }
+        }
+        return { kind: 'handle', handle, name: handle.name };
+      }
     } catch (e) {
       if (e && e.name === 'AbortError') return null;
-      // не поддерживается/запрещено — пробуем через input
+      if (e && e.__fb2Permission) throw e;
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) throw permissionError();
+      // прочие ошибки — пробуем через input
     }
   }
   const files = await pickWithInput(true);
@@ -206,12 +238,73 @@ export async function pickFolder() {
   return { kind: 'files', files, name };
 }
 
+function permissionError() {
+  const e = new Error(
+    'Браузер не дал доступ к папке. Нажмите «Выбрать папку» ещё раз и подтвердите запрос доступа, ' +
+    'а если запрос больше не появляется — сбросьте разрешения сайта: значок слева от адресной строки → ' +
+    '«Разрешения» → доступ к файлам.',
+  );
+  e.__fb2Permission = true;
+  return e;
+}
+
 /** Открывает выбор отдельных файлов. */
 export async function pickFiles() {
   const files = await pickWithInput(false);
   if (!files || !files.length) return null;
   const entries = files.map((f) => ({ file: f, path: f.name, name: f.name, size: f.size }));
   return { kind: 'files', files, name: `Файлы (${files.length})` };
+}
+
+/** Выбор ZIP-архивов (путь для Android: папку сложить в архив умеет любой файловый менеджер). */
+export async function pickArchives() {
+  const files = await pickWithInput(false, '.zip,application/zip,application/x-zip-compressed');
+  if (!files || !files.length) return null;
+  return files;
+}
+
+// ------------------------------------------------------- книги внутри архива
+
+/**
+ * Читает zip-архив и возвращает найденные внутри .fb2 (с метаданными).
+ * Каждая книга оборачивается в File, чтобы дальше работал общий путь добавления.
+ */
+export async function scanArchive(file, onProgress = () => {}) {
+  if (file.size > MAX_ZIP_BYTES) throw new Error(`архив больше ${Math.round(MAX_ZIP_BYTES / 1048576)} МБ`);
+  const buf = await file.arrayBuffer();
+  if (!isZip(buf)) throw new Error('это не ZIP-архив');
+
+  const all = zipEntries(buf).filter((e) => !e.name.endsWith('/'));
+  const books = all.filter((e) => /\.fb2$/i.test(e.name));
+  if (!books.length) return { entries: [], seen: all.length };
+
+  const out = [];
+  for (let i = 0; i < books.length; i++) {
+    const e = books[i];
+    onProgress({ done: i, total: books.length, name: e.name });
+    try {
+      const data = await zipExtract(buf, e);
+      const text = decodeXmlBuffer(data);
+      const short = e.name.split('/').pop();
+      out.push({
+        file: new File([data], short, { type: 'application/fb2+xml' }),
+        path: `${file.name} / ${e.name}`,
+        name: short,
+        size: data.byteLength,
+        meta: metaFromText(text),
+      });
+    } catch {
+      out.push({
+        file: null,
+        path: `${file.name} / ${e.name}`,
+        name: e.name.split('/').pop(),
+        size: e.size,
+        meta: { ok: false, error: 'не удалось распаковать' },
+      });
+    }
+  }
+  onProgress({ done: books.length, total: books.length, name: '' });
+  return { entries: out.filter((e) => e.file), seen: all.length, broken: out.filter((e) => !e.file) };
 }
 
 // --------------------------------------------------- запоминание папки

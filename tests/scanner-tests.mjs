@@ -9,7 +9,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 
 const {
   isCandidateName, isBookName, isZipName, metaFromText, peekMeta,
-  walkDirectory, scanSource, markExisting, mapLimit,
+  walkDirectory, scanSource, markExisting, mapLimit, scanArchive,
 } = await import('../js/scanner.js');
 
 const lines = [];
@@ -145,6 +145,28 @@ function dirHandle(name, children) {
   eq('mapLimit: порядок результатов сохранён', JSON.stringify(out), JSON.stringify([2, 4, 6, 8, 10, 12, 14]));
   ok('mapLimit: параллельность не выше лимита', maxActive <= 3, 'максимум одновременно: ' + maxActive);
   eq('mapLimit: обработаны все', order.length, 7);
+}
+
+// ---------- книги внутри ZIP-архива ----------
+{
+  const archiveBytes = await readFile(join(HERE, 'collection.zip'));
+  const archive = new File([archiveBytes], 'Мои книги.zip');
+  const res = await scanArchive(archive);
+  eq('архив: найдено 3 книги из 5 записей', res.entries.length, 3);
+  eq('архив: всего записей просмотрено', res.seen, 5);
+  const titles = res.entries.map((e) => e.meta.title).sort();
+  ok('архив: названия прочитаны', titles.includes('Проверочная книга') && titles.includes('Вторая книга архива'), titles.join(' | '));
+  ok('архив: книга в windows-1251 внутри архива читается', titles.includes('Проверочная книга'));
+  ok('архив: не-FB2 файлы в списке отсутствуют', !res.entries.some((e) => /\.(txt|png)$/i.test(e.name)));
+  ok('архив: путь включает имя архива и путь внутри', res.entries.some((e) => /^Мои книги\.zip \/ Книги\/.+\.fb2$/.test(e.path)), res.entries.map((e) => e.path).join(' | '));
+  ok('архив: каждая книга готова к добавлению', res.entries.every((e) => e.file && typeof e.file.arrayBuffer === 'function'));
+
+  const single = await scanArchive(new File([zipBytes], 'one.zip'));
+  eq('архив с одной книгой', single.entries.length, 1);
+
+  let threw = null;
+  try { await scanArchive(new File([new TextEncoder().encode('не архив')], 'fake.zip')); } catch (e) { threw = e; }
+  ok('архив: недопустимый файл отклонён', !!threw && /ZIP/i.test(threw.message), threw && threw.message);
 }
 
 // ---------- итог ----------

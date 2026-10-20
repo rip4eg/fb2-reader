@@ -108,4 +108,19 @@ open(os.path.join(HERE, "nodecl-1251.fb2"), "wb").write(no_decl.encode("windows-
 # 4. UTF-8 с BOM.
 open(os.path.join(HERE, "bom-utf8.fb2"), "wb").write(b"\xef\xbb\xbf" + fb2().encode("utf-8"))
 
+# --- архив с несколькими книгами (путь импорта на Android) ---
+second = (
+    fb2()
+    .replace("Проверочная книга", "Вторая книга архива")
+    .replace("Иван", "Пётр")
+    .replace("Тестов", "Второй")
+)
+with zipfile.ZipFile(os.path.join(HERE, "collection.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("Книги/", "")
+    z.writestr("Книги/Первая.fb2", xml.encode("utf-8"))
+    z.writestr("Вторая.fb2", second.encode("utf-8"))
+    z.writestr("Книги/1251.fb2", xml.replace('encoding="utf-8"', 'encoding="windows-1251"').encode("windows-1251"))
+    z.writestr("Книги/заметки.txt", "это не книга")
+    z.writestr("Книги/обложка.png", PNG)
+
 print("ok:", sorted(f for f in os.listdir(HERE) if f.endswith((".fb2", ".zip"))))

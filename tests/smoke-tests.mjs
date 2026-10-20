@@ -171,9 +171,11 @@ try {
   const scanModal = window.document.querySelector('.scan-modal');
   ok('диалог импорта из папки открылся', !!scanModal);
   if (scanModal) {
-    ok('в диалоге есть выбор папки и файлов',
-      /Выбрать папку/.test(scanModal.textContent) && /Выбрать файлы/.test(scanModal.textContent));
-    ok('показано предупреждение о браузере без выбора папки', /не умеет открывать папку/.test(scanModal.textContent));
+    ok('в диалоге есть выбор папки, файлов и ZIP-архива',
+      /Выбрать папку/.test(scanModal.textContent)
+      && /Выбрать файлы/.test(scanModal.textContent)
+      && /Из ZIP-архива/.test(scanModal.textContent));
+    ok('показано пояснение про браузер без выбора папки', /нельзя открыть папку целиком/.test(scanModal.textContent));
     scanModal.querySelector('[aria-label="Закрыть"]').click();
     await tick(4);
     ok('диалог импорта закрылся', !window.document.querySelector('.scan-modal'));
