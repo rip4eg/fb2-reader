@@ -4,7 +4,7 @@ import { h, mount, toast, confirmDlg, promptDlg, modal, backdrop, fmtBytes, fmtA
 import { openFb2Buffer } from './fb2.js';
 import {
   pickFolder, pickFiles, pickArchives, scanSource, scanArchive, peekMeta, markExisting, mapLimit,
-  rememberFolder, rememberedFolder, requestFolderPermission, folderPickerAvailable,
+  rememberFolder, rememberedFolder, requestFolderPermission, folderPickerAvailable, browserCapabilities,
 } from './scanner.js';
 
 const SORTS = [
@@ -352,7 +352,10 @@ export class Library {
     let entries = [];
     let chosen = new Set();
     let scanning = false;
+    let folderIgnored = false;
+    let lastPick = '';
     let remembered = await rememberedFolder().catch(() => null);
+    const caps = browserCapabilities();
 
     const dialog = h('div.modal.scan-modal');
     const back = backdrop(dialog, null, 'modal-back');
@@ -394,23 +397,30 @@ export class Library {
           btn.textContent = 'Добавляю…';
           const files = entries.filter((e) => chosen.has(e.path)).map((e) => e.file);
           try {
-            await this.uploadFiles(files, status);
-          } finally {
-            back.close();
+            const added = await this.uploadFiles(files, status);
+            // окно не закрываем: так можно добавить книги из нескольких мест подряд
+            entries = markExisting(entries, this.store.library.books);
+            chosen = new Set();
+            status.textContent = `Добавлено: ${added}. Можно выбрать другую папку или архив — или закрыть окно.`;
             this.app.rerender();
+            render();
+          } catch (e) {
+            status.textContent = 'Не удалось добавить: ' + ((e && e.message) || e);
+            btn.disabled = false;
+            btn.textContent = 'Повторить';
           }
         },
       }, chosen.size ? `Добавить (${chosen.size})` : 'Добавить');
       footer.replaceChildren(
         h('button.btn.ghost.sm', {
-          onclick: () => { chosen = new Set(entries.filter((e) => e.meta.ok).map((e) => e.path)); renderRows(); updateFooter(); },
+          onclick: () => { chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path)); renderRows(); updateFooter(); },
         }, 'Выбрать все'),
         h('button.btn.ghost.sm', {
           onclick: () => { chosen.clear(); renderRows(); updateFooter(); },
         }, 'Снять все'),
         h('span.sep'),
         h('span.hint', `выбрано ${chosen.size} из ${entries.length}`),
-        h('button.btn', { onclick: close }, 'Отмена'),
+        h('button.btn', { onclick: close }, 'Готово'),
         btn,
       );
     };
@@ -420,6 +430,12 @@ export class Library {
       scanning = true;
       entries = [];
       chosen.clear();
+      // Браузер мог проигнорировать «папку» и вернуть просто файлы — это важно показать.
+      const rootFolder = (source.files || []).map((f) => String(f.webkitRelativePath || '')).find(Boolean);
+      folderIgnored = source.kind !== 'handle' && !rootFolder;
+      lastPick = source.kind === 'handle'
+        ? `папка «${source.name}»`
+        : (rootFolder ? `папка «${rootFolder.split('/')[0]}», файлов ${source.files.length}` : `${source.files.length} файлов без папки`);
       status.textContent = 'Смотрю папку…';
       render();
       try {
@@ -427,16 +443,15 @@ export class Library {
           status.textContent = `Просмотрено файлов: ${seen}, найдено книг: ${found}`;
         });
         if (!res.entries.length) {
-          status.textContent = 'В этой папке нет файлов .fb2 или .fb2.zip';
+          status.textContent = folderIgnored
+            ? `Выбрано файлов: ${res.seen}, но среди них нет .fb2 или .fb2.zip.`
+            : 'В этой папке нет файлов .fb2 или .fb2.zip (включая вложенные папки).';
           return;
         }
         status.textContent = `Читаю названия: 0 из ${res.entries.length}`;
-        let done = 0;
         const withMeta = await mapLimit(res.entries, 4, async (e) => ({ ...e, meta: await peekMeta(e.file) }), (n, total) => {
-          done = n;
           status.textContent = `Читаю названия: ${n} из ${total}`;
         });
-        void done;
         entries = markExisting(withMeta, this.store.library.books);
         chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path));
         if (source.kind === 'handle') {
@@ -540,10 +555,24 @@ export class Library {
         ),
         folderPickerAvailable()
           ? h('p.hint', 'Если браузер спросит про доступ к файлам — нажмите «Разрешить». Папка запомнится, и в следующий раз хватит кнопки с её именем.')
-          : h('p.hint', 'В этом браузере нельзя открыть папку целиком — в Chrome на Android такого выбора нет, поэтому система и не показывает запрос доступа. Работают два пути: «Выбрать файлы» (можно отметить сразу много) или сложить папку в ZIP-архив и нажать «Из ZIP-архива».'),
+          : h('p.hint', caps.android
+            ? 'В Chrome на Android браузер не отдаёт папку целиком, поэтому и запроса доступа нет — это ограничение телефона, а не настройка. Что делать: «Выбрать файлы» → зайти в папку с книгами → ⋮ → «Выбрать всё». Либо один раз собрать библиотеку на компьютере — на телефоне книги появятся сами.'
+            : 'Этот браузер не умеет открывать папку целиком. Используйте «Выбрать файлы» или «Из ZIP-архива», либо откройте читалку в Chrome на компьютере.'),
+        folderIgnored
+          ? h('div.notice.err', { style: { marginTop: '.5rem' } },
+            'Браузер вернул только выбранные файлы, без папки — значит, выбор папки здесь не поддерживается. ',
+            'Откройте папку с книгами в проводнике, нажмите ⋮ → «Выбрать всё» и добавьте: так вы захватите сразу всё содержимое папки.')
+          : null,
         status,
         entries.length ? list : null,
         entries.length ? footer : null,
+        h('details', { style: { marginTop: '.7rem' } },
+          h('summary.hint', { style: { cursor: 'pointer' } }, 'Что умеет этот браузер'),
+          h('div.hint',
+            `Платформа: ${caps.platform}. Системный выбор папки: ${caps.folderPicker ? 'есть' : 'нет'}. `
+            + `Выбор папки через поле файла: ${caps.directoryInput ? 'заявлен' : 'нет'}.`
+            + (lastPick ? ` Последний выбор: ${lastPick}.` : '')),
+        ),
       );
       if (entries.length) { renderRows(); updateFooter(); }
     };

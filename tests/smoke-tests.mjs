@@ -175,7 +175,7 @@ try {
       /Выбрать папку/.test(scanModal.textContent)
       && /Выбрать файлы/.test(scanModal.textContent)
       && /Из ZIP-архива/.test(scanModal.textContent));
-    ok('показано пояснение про браузер без выбора папки', /нельзя открыть папку целиком/.test(scanModal.textContent));
+    ok('показано пояснение про браузер без выбора папки', /не умеет открывать папку целиком|не отдаёт папку целиком/.test(scanModal.textContent));
     scanModal.querySelector('[aria-label="Закрыть"]').click();
     await tick(4);
     ok('диалог импорта закрылся', !window.document.querySelector('.scan-modal'));
@@ -223,7 +223,14 @@ try {
     await tick(80);
 
     eq('скан: книги добавлены в библиотеку', app.store.library.books.length, before + 2);
-    ok('скан: диалог закрылся после добавления', !window.document.querySelector('.scan-modal'));
+    const stillOpen = window.document.querySelector('.scan-modal');
+    ok('скан: окно остаётся открытым — можно добавить из другой папки', !!stillOpen);
+    ok('скан: добавленные помечены как «уже есть»', !!stillOpen && /уже есть/.test(stillOpen.textContent));
+    const doneBtn = Array.from(stillOpen.querySelectorAll('button')).find((b) => b.textContent === 'Готово');
+    ok('скан: есть кнопка «Готово»', !!doneBtn);
+    doneBtn.click();
+    await tick(6);
+    ok('скан: окно закрылось по «Готово»', !window.document.querySelector('.scan-modal'));
     const added = app.store.library.books.filter((b) => b.title === 'Новая книга' || b.title === 'Новая книга');
     ok('скан: добавленная книга с правильным названием', added.length >= 1, app.store.library.books.map((b) => b.title).join(', '));
 

@@ -169,6 +169,21 @@ export function directoryInputSupported() {
   return folderPickerAvailable() || 'webkitdirectory' in document.createElement('input');
 }
 
+/** Что умеет текущий браузер — для диагностики в интерфейсе. */
+export function browserCapabilities() {
+  const ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '';
+  const android = /Android/i.test(ua);
+  const ios = /iPhone|iPad|iPod/i.test(ua);
+  return {
+    folderPicker: folderPickerAvailable(),
+    directoryInput: typeof document !== 'undefined' && 'webkitdirectory' in document.createElement('input'),
+    android,
+    ios,
+    mobile: android || ios,
+    platform: android ? 'Android' : ios ? 'iOS' : /Windows/i.test(ua) ? 'Windows' : /Mac OS X/i.test(ua) ? 'macOS' : /Linux/i.test(ua) ? 'Linux' : 'неизвестно',
+  };
+}
+
 function pickWithInput(directory, accept) {
   return new Promise((resolve) => {
     const input = document.createElement('input');
