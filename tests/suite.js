@@ -9,7 +9,7 @@
 
 import { b64ToBytes, bytesToB64, b64urlEncode, b64urlDecode, clamp } from '../js/util.js';
 import { isZip, zipEntries, unzipFirstFb2 } from '../js/zip.js';
-import { parseFb2, decodeXmlBuffer, fb2TextFromBuffer, BLOCK_SELECTOR } from '../js/fb2.js';
+import { parseFb2, decodeXmlBuffer, fb2TextFromBuffer, BLOCK_SELECTOR, pagesFromChars, CHARS_PER_PAGE } from '../js/fb2.js';
 import { indexBlocks, anchorAt, applyAnchor, percentAt } from '../js/position.js';
 import { encodeCfg, decodeCfg } from '../js/config.js';
 
@@ -78,6 +78,15 @@ export async function runSuite(env) {
   eq('meta.author', book.meta.author, 'Иван Тестов');
   eq('meta.sequence', book.meta.sequence, 'Серия тестов #3');
   eq('meta.annotation', book.meta.annotation, 'Аннотация для теста.');
+  ok('объём книги посчитан', book.charCount > 1000, 'знаков: ' + book.charCount);
+  ok('страниц больше нуля', book.pages >= 1, 'страниц: ' + book.pages);
+  eq('страниц: 0 знаков -> 1', pagesFromChars(0), 1);
+  eq('страниц: 900 знаков -> 1', pagesFromChars(900), 1);
+  eq('страниц: 1800 знаков -> 1', pagesFromChars(1800), 1);
+  eq('страниц: 2700 знаков -> 2', pagesFromChars(2700), 2);
+  eq('страниц: 3600 знаков -> 2', pagesFromChars(3600), 2);
+  eq('страниц: объём книги = знаки / 1800', book.pages, pagesFromChars(book.charCount));
+  ok('константа страницы задана', CHARS_PER_PAGE === 1800, String(CHARS_PER_PAGE));
   ok('обложка извлечена', !!book.coverBlob && book.coverBlob.type === 'image/png', book.coverBlob && book.coverBlob.type);
   eq('оглавление: 5 глав', book.toc.length, 5);
   eq('оглавление: глава 1', book.toc[0].title, 'Глава 1');

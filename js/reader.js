@@ -1,8 +1,8 @@
 // Читалка: рендер FB2, отслеживание позиции, темы, шрифты, сноски, оглавление.
 
 import { h, mount, clamp, throttle, debounce, toast, backdrop } from './util.js';
-import { openFb2Buffer, BLOCK_SELECTOR } from './fb2.js';
-import { indexBlocks, anchorAt as findAnchor, applyAnchor as scrollToAnchor, percentAt as percentOf } from './position.js';
+import { openFb2Buffer, BLOCK_SELECTOR, CHARS_PER_PAGE } from './fb2.js';
+import { indexBlocks, anchorAt as findAnchor, applyAnchor as scrollToAnchor } from './position.js';
 
 const PAGE_PAD = 6; // отступ сверху, на который ориентируемся при восстановлении позиции
 
@@ -47,12 +47,16 @@ export class Reader {
       h('button.btn.ghost.icon', { title: 'Настройки текста', onclick: () => this.openSettings() }, 'Aa'),
     );
 
-    this.saveLabel = h('span.hint', { style: { whiteSpace: 'nowrap', minWidth: '6.5em', textAlign: 'right' } }, '');
+    this.pagesLabel = h('span.hint.pages', { style: { whiteSpace: 'nowrap' } }, '');
+    this.saveLabel = h('span.hint', { style: { whiteSpace: 'nowrap', marginLeft: 'auto' } }, '');
     this.foot = h('div.reader-foot',
-      this.pctLabel,
+      h('div.foot-line',
+        this.pctLabel,
+        this.pagesLabel,
+        this.saveLabel,
+        h('button.btn.ghost.sm', { title: 'Сохранить сейчас', onclick: () => this.syncNow() }, '⟳'),
+      ),
       h('div.bar', this.barFill),
-      this.saveLabel,
-      h('button.btn.ghost.sm', { title: 'Сохранить сейчас', onclick: () => this.syncNow() }, '⟳'),
     );
 
     this.root = h('div.reader', this.bar, this.scroll, this.foot, this.notesHost);
@@ -147,6 +151,7 @@ export class Reader {
 
     this.blocks = indexBlocks(this.page, BLOCK_SELECTOR);
     this.sectionTopsDirty = true;
+    this.measurePages();
 
     const rec = this.store.progressFor(bookId);
     const start = rec && rec.a ? rec.a : { i: 0, o: 0 };
@@ -190,20 +195,53 @@ export class Reader {
 
   // ------------------------------------------------------------- позиция
 
+  /** Объём текста по блокам — основа для нумерации страниц. */
+  measurePages() {
+    this.charCounts = this.blocks.map((el) => (el.textContent || '').length);
+    this.cumChars = new Array(this.charCounts.length);
+    let acc = 0;
+    for (let i = 0; i < this.charCounts.length; i++) {
+      this.cumChars[i] = acc;
+      acc += this.charCounts[i];
+    }
+    this.totalChars = acc;
+    this.totalPages = Math.max(1, Math.round(acc / CHARS_PER_PAGE) || 1);
+  }
+
+  /** Страница по якорю: сколько прочитано и сколько осталось. */
+  pageAt(a) {
+    if (!this.totalPages || !a) return null;
+    const start = this.cumChars[a.i] || 0;
+    const len = this.charCounts[a.i] || 0;
+    const chars = start + (a.o || 0) * len;
+    const page = Math.min(this.totalPages, Math.max(1, Math.floor(chars / CHARS_PER_PAGE) + 1));
+    return { page, total: this.totalPages, left: Math.max(0, this.totalPages - page), read: page };
+  }
+
+  updatePagesLabel(a) {
+    const p = this.pageAt(a);
+    this.pagesLabel.textContent = p
+      ? `стр. ${p.page} из ${p.total} · осталось ${p.left}`
+      : '';
+    return p;
+  }
+
   capture() {
     if (!this.bookId || !this.blocks.length) return;
     const a = this.anchorAt();
     if (!a) return;
-    this.store.setProgress(this.bookId, { i: a.i, o: a.o }, a.pct).catch(() => {});
+    this.store.setProgress(this.bookId, { i: a.i, o: a.o }, a.pct, { pages: this.totalPages }).catch(() => {});
     this.setPct(a.pct);
+    this.updatePagesLabel(a);
     this.setSync();
   }
 
   flush() {
     const a = (this.bookId && this.blocks.length) ? this.anchorAt() : null;
     if (a) {
-      this.store.setProgress(this.bookId, { i: a.i, o: a.o }, a.pct, { immediate: true }).catch(() => {});
+      this.store.setProgress(this.bookId, { i: a.i, o: a.o }, a.pct, { immediate: true, pages: this.totalPages }).catch(() => {});
       this.setPct(a.pct);
+      this.updatePagesLabel(a);
       this.setSync();
     } else {
       this.store.flushProgress().catch(() => {});
@@ -233,8 +271,12 @@ export class Reader {
   }
 
   updatePct() {
-    if (!this.blocks.length) return;
-    this.setPct(percentOf(this.scroll, this.blocks, PAGE_PAD));
+    if (!this.blocks.length) return null;
+    const a = this.anchorAt();
+    if (!a) return null;
+    this.setPct(a.pct);
+    this.updatePagesLabel(a);
+    return a;
   }
 
   maybeHideBars() {

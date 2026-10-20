@@ -69,15 +69,31 @@ export class Library {
     if (!book) return h('div');
     const img = h('img.cover-mini', { alt: '' });
     this.loadCover(book, img);
+    const p = this.pagesInfo(book, rec);
     return h('div.card.continue-card',
       img,
       h('div.grow',
         h('div.hint', 'Продолжить чтение'),
         h('div.t', book.title),
-        h('div.a', (book.author || 'Автор неизвестен') + (rec ? ` · ${Math.round((rec.pct || 0) * 100)}% · ${fmtAgo(rec.at)}` : '')),
+        h('div.a', (book.author || 'Автор неизвестен')
+          + (rec ? ` · ${Math.round((rec.pct || 0) * 100)}%` : '')
+          + (p ? ` · стр. ${p.page} из ${p.total}, осталось ${p.left}` : '')
+          + (rec ? ` · ${fmtAgo(rec.at)}` : '')),
       ),
       h('button.btn.primary', { onclick: () => this.openBook(book.id) }, 'Читать'),
     );
+  }
+
+  /**
+   * Страницы книги: всего берём из записи прогресса (или из library.json),
+   * текущую — из процента. Если объём неизвестен, возвращаем null.
+   */
+  pagesInfo(book, rec) {
+    const total = (rec && rec.pages) || (book && book.pages) || 0;
+    if (!total) return null;
+    const pct = rec ? Math.max(0, Math.min(1, rec.pct || 0)) : 0;
+    const page = Math.max(1, Math.min(total, Math.round(pct * total) || 1));
+    return { page, total, left: Math.max(0, total - page) };
   }
 
   filterRow() {
@@ -120,6 +136,7 @@ export class Library {
     thumb.prepend(img);
     this.loadCover(book, img);
 
+    const pages = this.pagesInfo(book, rec);
     const node = h('div.book',
       thumb,
       h('div.bt', book.title),
@@ -127,6 +144,7 @@ export class Library {
       h('div.brow',
         h('div.bar', h('i', { style: { width: Math.round(pct * 100) + '%' } })),
         h('span.pct', Math.round(pct * 100) + '%')),
+      pages ? h('div.bpages', `стр. ${pages.page} из ${pages.total}`) : null,
       h('button.btn.sm.ghost.menu-btn', {
         title: 'Действия',
         onclick: (e) => { e.stopPropagation(); this.bookMenu(e.currentTarget, book); },
@@ -209,8 +227,11 @@ export class Library {
     try {
       const buf = await this.store.getBookBytes(book);
       const { download } = await import('./util.js');
-      const name = (book.author ? book.author + ' — ' : '') + book.title + '.fb2';
-      download(new Blob([buf], { type: 'application/fb2+xml' }), name.replace(/[\\/:*?"<>|]/g, '_'));
+      const { isZip } = await import('./zip.js');
+      // расширение — по фактическому содержимому, а не по имени в репозитории
+      const ext = isZip(buf) ? '.fb2.zip' : '.fb2';
+      const name = (book.author ? book.author + ' — ' : '') + book.title + ext;
+      download(new Blob([buf], { type: isZip(buf) ? 'application/zip' : 'application/fb2+xml' }), name.replace(/[\\/:*?"<>|]/g, '_'));
     } catch (e) { toast(e.message, { error: true }); }
   }
 
@@ -278,7 +299,7 @@ export class Library {
       try {
         const buf = await f.arrayBuffer();
         const parsed = await openFb2Buffer(buf, { fallbackTitle: f.name.replace(/\.(fb2|zip)$/i, '') });
-        items.push({ name: f.name, size: f.size, buffer: buf, meta: parsed.meta, coverBlob: parsed.coverBlob, parsed });
+        items.push({ name: f.name, size: f.size, buffer: buf, meta: parsed.meta, coverBlob: parsed.coverBlob, pages: parsed.pages, parsed });
         mount(row, h('span', '✓'), h('span', { style: { flex: '1 1 auto' } }, parsed.meta.title || f.name),
           h('span.hint', parsed.meta.author || ''));
       } catch (e) {
@@ -305,7 +326,7 @@ export class Library {
       btn.disabled = true;
       btn.textContent = 'Загружаю…';
       try {
-        await this.store.addBooks(items.map((i) => ({ name: i.name, size: i.size, buffer: i.buffer, meta: i.meta, coverBlob: i.coverBlob })), (done, total, title) => {
+        await this.store.addBooks(items.map((i) => ({ name: i.name, size: i.size, buffer: i.buffer, meta: i.meta, coverBlob: i.coverBlob, pages: i.pages })), (done, total, title) => {
           prog.firstChild.style.width = Math.round((done / total) * 100) + '%';
           progText.textContent = title ? `Загружено ${done} из ${total}: ${title}` : `Загружено ${done} из ${total}`;
         });
@@ -334,7 +355,7 @@ export class Library {
       try {
         const buf = await f.arrayBuffer();
         const parsed = await openFb2Buffer(buf, { fallbackTitle: f.name.replace(/\.(fb2|zip)$/i, '') });
-        items.push({ name: f.name, size: f.size, buffer: buf, meta: parsed.meta, coverBlob: parsed.coverBlob });
+        items.push({ name: f.name, size: f.size, buffer: buf, meta: parsed.meta, coverBlob: parsed.coverBlob, pages: parsed.pages });
         if (parsed.revoke) parsed.revoke();
       } catch (e) {
         toast(`«${f.name}»: ${e.message}`, { error: true, ms: 6000 });

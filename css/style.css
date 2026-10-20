@@ -152,6 +152,7 @@ label.field > span { display: block; font-size: .85rem; color: var(--muted); mar
 .book .bt { font-weight: 600; font-size: .92rem; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .book .ba { font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .book .brow { display: flex; align-items: center; gap: .4rem; margin-top: auto; }
+.book .bpages { font-size: .72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .bar { height: 4px; border-radius: 999px; background: var(--bg-soft); overflow: hidden; flex: 1; border: 1px solid var(--border); }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .pct { font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -189,12 +190,16 @@ label.field > span { display: block; font-size: .85rem; color: var(--muted); mar
   hyphens: auto; overflow-wrap: break-word;
 }
 .reader-foot {
-  display: flex; align-items: center; gap: .6rem; padding: .35rem .6rem;
-  padding-bottom: max(.35rem, env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; align-items: stretch; gap: .3rem;
+  padding: .3rem .6rem;
+  padding-bottom: max(.3rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--border); background: var(--bg); font-size: .78rem; color: var(--muted); z-index: 3;
   transition: transform .2s, opacity .2s;
 }
 .reader.hide-bars .reader-foot { transform: translateY(102%); opacity: 0; pointer-events: none; }
+.foot-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.foot-line .hint, .foot-line .pct { font-size: .78rem; }
+.foot-line .pages { color: var(--fg); opacity: .75; }
 .reader-foot .bar { height: 3px; }
 
 /* прогресс-полоса синхронизации в шапке */

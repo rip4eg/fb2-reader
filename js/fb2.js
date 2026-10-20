@@ -8,6 +8,15 @@ const XLINK = 'http://www.w3.org/1999/xlink';
 
 export const BLOCK_SELECTOR = 'p, .fb2-t, .fb2-subtitle, .fb2-empty, .fb2-image, table, .fb2-annotation';
 
+/** Сколько знаков считаем одной «страницей» — как на обычной книжной странице. */
+export const CHARS_PER_PAGE = 1800;
+
+/** Объём текста -> число страниц. Одинаково на всех устройствах. */
+export function pagesFromChars(chars) {
+  const n = Number(chars) || 0;
+  return Math.max(1, Math.round(n / CHARS_PER_PAGE) || 1);
+}
+
 function all(root, name) {
   let list;
   try { list = root.getElementsByTagNameNS('*', name); } catch { list = null; }
@@ -106,6 +115,7 @@ function createCtx() {
     toc: [],
     sectionMap: new Map(),
     noteMap: new Map(),
+    chars: 0,                // объём текста основной части книги
   };
 }
 
@@ -138,7 +148,10 @@ function inline(list, ctx, mode, depth) {
   for (const n of list) {
     if (n.nodeType === 3) {
       const t = n.nodeValue.replace(/\s+/g, ' ');
-      if (t) out.push(document.createTextNode(t));
+      if (t) {
+        ctx.chars += t.length; // объём текста для подсчёта страниц
+        out.push(document.createTextNode(t));
+      }
       continue;
     }
     if (n.nodeType !== 1) continue;
@@ -253,7 +266,9 @@ function renderNode(n, ctx, mode, depth) {
       // Неизвестный контейнер — разворачиваем прозрачно, но не теряем блоки.
       if (kids(n).length) return inline(childNodes(n), ctx, mode, depth);
       const t = normSpace(n.textContent);
-      return t ? document.createTextNode(t) : null;
+      if (!t) return null;
+      ctx.chars += t.length;
+      return document.createTextNode(t);
     }
   }
 }
@@ -371,6 +386,7 @@ export function parseFb2(xmlText, opts = {}) {
   const notesHost = document.createElement('div');
   notesHost.className = 'fb2-notes';
   const tocBeforeNotes = ctx.toc.length;
+  const charsInBook = ctx.chars; // до сносок: считаем только текст книги
   for (const body of notesBodies) {
     const host = document.createElement('div');
     host.className = 'fb2-notes-body';
@@ -421,6 +437,8 @@ export function parseFb2(xmlText, opts = {}) {
     noteMap: ctx.noteMap,
     coverBlob,
     coverUrl,
+    charCount: charsInBook,
+    pages: pagesFromChars(charsInBook),
     revoke() {
       for (const u of ctx.urls) { try { URL.revokeObjectURL(u); } catch { /* ignore */ } }
       ctx.urls.length = 0;

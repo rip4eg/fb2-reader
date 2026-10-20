@@ -87,6 +87,7 @@ try {
   eq('автор взят из FB2', book.author, 'Иван Тестов');
   ok('обложка сохранена', !!book.cover);
   ok('сетка показывает книгу', /Проверочная книга/.test(root.textContent));
+  ok('в карточке книги видны страницы', /стр\. \d+ из \d+/.test(root.textContent), (root.textContent.match(/стр\. \d+ из \d+/) || ['нет'])[0]);
 
   // открываем читалку
   app.openBook(book.id);
@@ -98,6 +99,8 @@ try {
   eq('заголовок книги в шапке читалки', readerEl.querySelector('.reader-title').textContent, 'Проверочная книга · Иван Тестов');
   ok('оглавление доступно', !!readerEl.querySelector('[title="Оглавление"]'));
   ok('есть обложка в начале текста', !!readerEl.querySelector('.fb2-cover img'));
+  const pagesLabel = readerEl.querySelector('.reader-foot .pages');
+  ok('в читалке видно страницы', !!pagesLabel && /стр\. \d+ из \d+ · осталось \d+/.test(pagesLabel.textContent), pagesLabel ? pagesLabel.textContent : 'нет метки');
 
   // кнопки тем
   const themeBtn = readerEl.querySelector('[title="Сменить фон"]');

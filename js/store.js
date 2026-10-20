@@ -3,6 +3,7 @@
 
 import { GitHubApi, GhError } from './gh.js';
 import { idb, normSpace, utf8ToB64, bytesToB64 } from './util.js';
+import { isZip } from './zip.js';
 import { device, setDeviceName } from './config.js';
 
 const LIB_PATH = 'library.json';
@@ -283,9 +284,11 @@ export class Store extends EventTarget {
    * отправка не случилась бы никогда — позиция уходила бы в репозиторий только
    * после паузы, а при закрытии вкладки терялась бы.
    */
-  async setProgress(bookId, anchor, pct, { immediate = false } = {}) {
+  async setProgress(bookId, anchor, pct, { immediate = false, pages = 0 } = {}) {
     if (!this.me) return;
-    this.me.books[bookId] = { a: anchor, pct: Math.max(0, Math.min(1, pct || 0)), at: new Date().toISOString() };
+    const rec = { a: anchor, pct: Math.max(0, Math.min(1, pct || 0)), at: new Date().toISOString() };
+    if (pages) rec.pages = pages; // сколько всего страниц — пригодится библиотеке
+    this.me.books[bookId] = rec;
     this.me.updatedAt = new Date().toISOString();
     this.dirty = true;
     this.emit('progress', { bookId });
@@ -404,7 +407,9 @@ export class Store extends EventTarget {
       const it = items[k];
       onProgress(k, items.length, it.meta && it.meta.title);
       const id = 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const file = `books/${id}.fb2`;
+      // .fb2.zip кладём с правильным расширением: читалка определяет архив по содержимому,
+      // но при скачивании обратно расширение должно соответствовать файлу.
+      const file = `books/${id}${isZip(it.buffer) ? '.fb2.zip' : '.fb2'}`;
       files.push({ path: file, bytes: it.buffer });
       let cover = null, coverType = null;
       if (it.coverBlob) {
@@ -420,6 +425,7 @@ export class Store extends EventTarget {
         lang: it.meta.lang || '',
         sequence: it.meta.sequence || '',
         size: it.size || (it.buffer.byteLength || 0),
+        pages: it.pages || 0, // объём в страницах, чтобы библиотека показывала их без разбора книги
         file,
         cover,
         coverType,
