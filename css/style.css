@@ -258,6 +258,29 @@ label.field > span { display: block; font-size: .85rem; color: var(--muted); mar
 .modal h3 { margin: 0 0 .6rem; }
 .modal .actions { display: flex; gap: .5rem; justify-content: flex-end; margin-top: 1rem; flex-wrap: wrap; }
 
+/* ============ Импорт из папки ============ */
+.modal.scan-modal { max-width: 46rem; }
+.scan-modal .hint { margin: .4rem 0 .7rem; }
+.scan-list {
+  max-height: min(48vh, 420px); overflow: auto;
+  border: 1px solid var(--border); border-radius: 10px;
+}
+.scan-row {
+  display: flex; gap: .6rem; align-items: center;
+  padding: .45rem .6rem; border-bottom: 1px solid var(--border);
+  cursor: pointer; background: var(--surface);
+}
+.scan-row:last-child { border-bottom: 0; }
+.scan-row:hover { background: var(--bg-soft); }
+.scan-row input[type="checkbox"] { width: 1.05rem; height: 1.05rem; flex: none; accent-color: var(--accent); }
+.scan-row .meta { flex: 1 1 auto; min-width: 0; }
+.scan-row .t { font-weight: 600; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scan-row .p { font-size: .75rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scan-row .sz { font-size: .75rem; color: var(--muted); white-space: nowrap; flex: none; }
+.scan-row.already { opacity: .6; }
+.scan-row.bad .t { color: var(--muted); text-decoration: line-through; }
+.scan-actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .8rem; }
+
 /* ============ Оглавление ============ */
 .toc-panel {
   position: fixed; top: 0; bottom: 0; left: 0; width: min(24rem, 88vw); z-index: 95;

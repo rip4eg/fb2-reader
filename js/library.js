@@ -2,6 +2,10 @@
 
 import { h, mount, toast, confirmDlg, promptDlg, modal, backdrop, fmtBytes, fmtAgo, initials, escapeHtml } from './util.js';
 import { openFb2Buffer } from './fb2.js';
+import {
+  pickFolder, pickFiles, scanSource, peekMeta, markExisting, mapLimit,
+  rememberFolder, rememberedFolder, requestFolderPermission, folderPickerAvailable,
+} from './scanner.js';
 
 const SORTS = [
   { v: 'recent', label: 'Недавние' },
@@ -54,6 +58,7 @@ export class Library {
         h('div', { style: { flex: '1 1 auto' } },
           h('strong', { style: { fontSize: '1.05rem' } }, 'Моя библиотека'),
           h('div.hint', `Книг: ${total} · прочитано: ${stats.read} · читаю: ${stats.inProgress}`)),
+        h('button.btn', { onclick: () => this.folderImport() }, '🗀 Из папки'),
         h('button.btn.primary', { onclick: () => this.pickFiles() }, '＋ Добавить книгу'),
       ),
       this.app.offlineNotice(),
@@ -316,5 +321,175 @@ export class Library {
 
     box.append(h('div.row', { style: { justifyContent: 'flex-end', marginTop: '1rem' } },
       h('button.btn', { onclick: () => back.close() }, 'Отмена'), btn));
+  }
+
+  // -------------------------------------------------- импорт из папки
+
+  /** Полный разбор выбранных файлов и загрузка в библиотеку. */
+  async uploadFiles(files, statusEl) {
+    const items = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (statusEl) statusEl.textContent = `Разбираю ${i + 1} из ${files.length}: ${f.name}`;
+      try {
+        const buf = await f.arrayBuffer();
+        const parsed = await openFb2Buffer(buf, { fallbackTitle: f.name.replace(/\.(fb2|zip)$/i, '') });
+        items.push({ name: f.name, size: f.size, buffer: buf, meta: parsed.meta, coverBlob: parsed.coverBlob });
+        if (parsed.revoke) parsed.revoke();
+      } catch (e) {
+        toast(`«${f.name}»: ${e.message}`, { error: true, ms: 6000 });
+      }
+    }
+    if (!items.length) { toast('Ни один файл не удалось разобрать', { error: true }); return 0; }
+    await this.store.addBooks(items, (done, total, title) => {
+      if (statusEl) statusEl.textContent = title ? `Загружено ${done} из ${total}: ${title}` : `Загружено ${done} из ${total}`;
+    });
+    toast(`Добавлено книг: ${items.length}`);
+    return items.length;
+  }
+
+  async folderImport() {
+    let entries = [];
+    let chosen = new Set();
+    let scanning = false;
+    let remembered = await rememberedFolder().catch(() => null);
+
+    const dialog = h('div.modal.scan-modal');
+    const back = backdrop(dialog, null, 'modal-back');
+    const close = () => back.close();
+    const list = h('div.scan-list');
+    const status = h('div.hint');
+    const footer = h('div.scan-actions');
+
+    const renderRows = () => {
+      list.replaceChildren();
+      for (const e of entries) {
+        const cb = h('input', { type: 'checkbox' });
+        cb.checked = chosen.has(e.path);
+        cb.disabled = !e.meta.ok;
+        cb.addEventListener('change', () => {
+          if (cb.checked) chosen.add(e.path); else chosen.delete(e.path);
+          updateFooter();
+        });
+        const title = e.meta.ok ? (e.meta.title || e.name) : e.name;
+        const sub = e.meta.ok
+          ? (e.meta.author || 'автор не указан')
+          : (e.meta.error || 'не FB2');
+        list.append(h('label.scan-row' + (e.existing ? '.already' : '') + (e.meta.ok ? '' : '.bad'),
+          cb,
+          h('div.meta',
+            h('div.t', title),
+            h('div.p', `${sub} · ${e.path}`)),
+          h('span.sz', fmtBytes(e.size)),
+          e.existing ? h('span.badge', 'уже есть') : null,
+        ));
+      }
+    };
+
+    const updateFooter = () => {
+      const btn = h('button.btn.primary', {
+        disabled: chosen.size === 0,
+        onclick: async () => {
+          btn.disabled = true;
+          btn.textContent = 'Добавляю…';
+          const files = entries.filter((e) => chosen.has(e.path)).map((e) => e.file);
+          try {
+            await this.uploadFiles(files, status);
+          } finally {
+            back.close();
+            this.app.rerender();
+          }
+        },
+      }, chosen.size ? `Добавить (${chosen.size})` : 'Добавить');
+      footer.replaceChildren(
+        h('button.btn.ghost.sm', {
+          onclick: () => { chosen = new Set(entries.filter((e) => e.meta.ok).map((e) => e.path)); renderRows(); updateFooter(); },
+        }, 'Выбрать все'),
+        h('button.btn.ghost.sm', {
+          onclick: () => { chosen.clear(); renderRows(); updateFooter(); },
+        }, 'Снять все'),
+        h('span.sep'),
+        h('span.hint', `выбрано ${chosen.size} из ${entries.length}`),
+        h('button.btn', { onclick: close }, 'Отмена'),
+        btn,
+      );
+    };
+
+    const runScan = async (source) => {
+      if (!source || scanning) return;
+      scanning = true;
+      entries = [];
+      chosen.clear();
+      status.textContent = 'Смотрю папку…';
+      render();
+      try {
+        const res = await scanSource(source, ({ seen, found }) => {
+          status.textContent = `Просмотрено файлов: ${seen}, найдено книг: ${found}`;
+        });
+        if (!res.entries.length) {
+          status.textContent = 'В этой папке нет файлов .fb2 или .fb2.zip';
+          return;
+        }
+        status.textContent = `Читаю названия: 0 из ${res.entries.length}`;
+        let done = 0;
+        const withMeta = await mapLimit(res.entries, 4, async (e) => ({ ...e, meta: await peekMeta(e.file) }), (n, total) => {
+          done = n;
+          status.textContent = `Читаю названия: ${n} из ${total}`;
+        });
+        void done;
+        entries = markExisting(withMeta, this.store.library.books);
+        chosen = new Set(entries.filter((e) => e.meta.ok && !e.existing).map((e) => e.path));
+        if (source.kind === 'handle') {
+          rememberFolder(source.handle).catch(() => {});
+          remembered = source.handle;
+        }
+        const bad = entries.filter((e) => !e.meta.ok).length;
+        status.textContent = `Найдено книг: ${entries.length}` +
+          (res.seen > entries.length ? ` из ${res.seen} просмотренных файлов` : '') +
+          (bad ? ` · не удалось прочитать: ${bad}` : '');
+      } catch (err) {
+        status.textContent = 'Не удалось просмотреть папку: ' + ((err && err.message) || err);
+      } finally {
+        scanning = false;
+        render();
+      }
+    };
+
+    const render = () => {
+      dialog.replaceChildren(
+        h('div.row', { style: { alignItems: 'center' } },
+          h('h3', { style: { flex: '1 1 auto', margin: 0 } }, 'Импорт из папки'),
+          h('button.btn.ghost.icon', { onclick: close, 'aria-label': 'Закрыть' }, '✕')),
+        h('p.hint', 'Выберите папку с книгами: читалка найдёт в ней и во вложенных папках файлы ',
+          h('code.mono', '.fb2'), ' и ', h('code.mono', '.fb2.zip'),
+          '. В библиотеку ничего не уйдёт, пока вы не отметите книги и не нажмёте «Добавить».'),
+        h('div.row',
+          h('button.btn.primary', {
+            disabled: scanning,
+            onclick: async () => { try { const src = await pickFolder(); if (src) runScan(src); } catch (e) { status.textContent = 'Не удалось открыть выбор папки: ' + e.message; } },
+          }, 'Выбрать папку'),
+          h('button.btn', {
+            disabled: scanning,
+            onclick: async () => { try { const src = await pickFiles(); if (src) runScan(src); } catch (e) { status.textContent = 'Не удалось открыть выбор файлов: ' + e.message; } },
+          }, 'Выбрать файлы'),
+          remembered && !scanning ? h('button.btn.ghost', {
+            onclick: async () => {
+              const perm = await requestFolderPermission(remembered);
+              if (perm !== 'granted') { toast('Браузер не дал доступ к папке — выберите её заново', { error: true }); return; }
+              runScan({ kind: 'handle', handle: remembered, name: remembered.name });
+            },
+          }, `↻ ${remembered.name}`) : null,
+        ),
+        folderPickerAvailable()
+          ? null
+          : h('p.hint', 'Этот браузер не умеет открывать папку целиком (на Android так бывает часто). Выберите файлы кнопкой «Выбрать файлы» — или откройте читалку в Chrome на компьютере.'),
+        status,
+        entries.length ? list : null,
+        entries.length ? footer : null,
+      );
+      if (entries.length) { renderRows(); updateFooter(); }
+    };
+
+    render();
   }
 }

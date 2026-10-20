@@ -163,6 +163,75 @@ try {
   const coverImg = window.document.querySelector('.book .thumb img');
   ok('в карточке книги есть обложка', !!coverImg);
 
+  // импорт из папки: диалог
+  const folderBtn = Array.from(root.querySelectorAll('button')).find((b) => /Из папки/.test(b.textContent));
+  ok('кнопка «Из папки» есть в библиотеке', !!folderBtn);
+  folderBtn.click();
+  await tick(12);
+  const scanModal = window.document.querySelector('.scan-modal');
+  ok('диалог импорта из папки открылся', !!scanModal);
+  if (scanModal) {
+    ok('в диалоге есть выбор папки и файлов',
+      /Выбрать папку/.test(scanModal.textContent) && /Выбрать файлы/.test(scanModal.textContent));
+    ok('показано предупреждение о браузере без выбора папки', /не умеет открывать папку/.test(scanModal.textContent));
+    scanModal.querySelector('[aria-label="Закрыть"]').click();
+    await tick(4);
+    ok('диалог импорта закрылся', !window.document.querySelector('.scan-modal'));
+  }
+
+  // импорт из папки: полный путь со «сканированием» настоящей папки
+  {
+    const fb2b = Buffer.from(
+      fb2.toString('utf8')
+        .replace('Проверочная книга', 'Новая книга')
+        .replace('Иван', 'Пётр')
+        .replace('Тестов', 'Второй'),
+      'utf8',
+    );
+    const mkFile = (name, data) => ({ kind: 'file', name, async getFile() { return new window.File([data], name); } });
+    const mkDir = (name, children) => ({
+      kind: 'directory',
+      name,
+      async *entries() { for (const c of children) yield [c.name, c]; },
+    });
+    window.showDirectoryPicker = async () => mkDir('Мои книги', [
+      mkFile('Новая.fb2', fb2b),
+      mkFile('Посторонний.txt', new Uint8Array([1, 2, 3])),
+      mkDir('Вложенная', [mkFile('Ещё.fb2', fb2b)]),
+    ]);
+
+    const before = app.store.library.books.length;
+    const btn = Array.from(root.querySelectorAll('button')).find((b) => /Из папки/.test(b.textContent));
+    btn.click();
+    await tick(12);
+    const modal2 = window.document.querySelector('.scan-modal');
+    const pickBtn = Array.from(modal2.querySelectorAll('button')).find((b) => b.textContent === 'Выбрать папку');
+    pickBtn.click();
+    await tick(80);
+
+    const rows = modal2.querySelectorAll('.scan-row');
+    ok('скан: найдены файлы .fb2 во вложенных папках', rows.length === 2, 'строк: ' + rows.length);
+    ok('скан: показано название из метаданных', /Новая книга/.test(modal2.textContent));
+    ok('скан: показано имя папки в пути', /Вложенная\/Ещё\.fb2/.test(modal2.textContent));
+    ok('скан: посторонний файл не попал в список', !/Посторонний/.test(modal2.textContent));
+
+    const addBtn = Array.from(modal2.querySelectorAll('button')).find((b) => /^Добавить/.test(b.textContent));
+    ok('скан: кнопка добавления активна', !!addBtn && !addBtn.disabled, addBtn ? addBtn.textContent : 'нет кнопки');
+    addBtn.click();
+    await tick(80);
+
+    eq('скан: книги добавлены в библиотеку', app.store.library.books.length, before + 2);
+    ok('скан: диалог закрылся после добавления', !window.document.querySelector('.scan-modal'));
+    const added = app.store.library.books.filter((b) => b.title === 'Новая книга' || b.title === 'Новая книга');
+    ok('скан: добавленная книга с правильным названием', added.length >= 1, app.store.library.books.map((b) => b.title).join(', '));
+
+    // убираем за собой, чтобы не мешать проверкам ниже
+    for (const b of app.store.library.books.slice()) {
+      if (b.title !== book.title) await app.store.removeBook(b.id);
+    }
+    eq('скан: состояние восстановлено', app.store.library.books.length, before);
+  }
+
   // меню книги
   const menuBtn = window.document.querySelector('.book .menu-btn');
   menuBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
