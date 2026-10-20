@@ -29,26 +29,61 @@ function getAttrs(el) {
   return o;
 }
 
-/** Определяет кодировку по XML-декларации/BOM и декодирует буфер. */
+const ENC_ALIASES = {
+  'utf-8': 'utf-8', utf8: 'utf-8', 'utf-8bom': 'utf-8',
+  'windows-1251': 'windows-1251', windows1251: 'windows-1251', cp1251: 'windows-1251',
+  'win-1251': 'windows-1251', 'x-cp1251': 'windows-1251', 'ms-cp1251': 'windows-1251',
+  'koi8-r': 'koi8-r', koi8r: 'koi8-r', 'koi8-u': 'koi8-u',
+  'iso-8859-1': 'iso-8859-1', latin1: 'iso-8859-1', 'iso-8859-5': 'iso-8859-5',
+  'ibm866': 'ibm866', cp866: 'ibm866', 'dos-866': 'ibm866',
+  'utf-16': 'utf-16le', 'utf-16le': 'utf-16le', 'utf-16be': 'utf-16be',
+};
+
+function readDeclaredEncoding(b) {
+  const head = new TextDecoder('latin1').decode(b.subarray(0, 1024));
+  const m = head.match(/<\?xml[^>]*?encoding\s*=\s*["']([\w.:-]+)["']/i)
+    || head.match(/encoding\s*=\s*["']([\w.:-]+)["']/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Определяет кодировку и декодирует буфер.
+ *
+ * Раньше проверялся фрагмент в 500 байт на «символы замены»: если обрыв попадал
+ * на середину многобайтового символа, корректный UTF-8 принимался за
+ * windows-1251 и весь текст превращался в «Р’СЃСЏ РєСЂРµРјР»РµРІСЃРєР°СЏ».
+ * Теперь решение принимается по всему файлу.
+ */
 export function decodeXmlBuffer(buf) {
   const b = new Uint8Array(buf);
-  if (b.length > 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) {
-    return new TextDecoder('utf-8').decode(b.subarray(3));
-  }
-  if (b.length > 1 && b[0] === 0xff && b[1] === 0xfe) return new TextDecoder('utf-16le').decode(b);
-  if (b.length > 1 && b[0] === 0xfe && b[1] === 0xff) return new TextDecoder('utf-16be').decode(b);
+  if (b.length > 3 && b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return new TextDecoder('utf-8').decode(b.subarray(3));
+  if (b.length > 1 && b[0] === 0xff && b[1] === 0xfe) return new TextDecoder('utf-16le').decode(b.subarray(2));
+  if (b.length > 1 && b[0] === 0xfe && b[1] === 0xff) return new TextDecoder('utf-16be').decode(b.subarray(2));
 
-  const head = new TextDecoder('latin1').decode(b.subarray(0, 500));
-  let enc = 'utf-8';
-  const m = head.match(/encoding\s*=\s*["']([\w.:-]+)["']/i);
-  if (m) enc = m[1].toLowerCase();
-  // UTF-8 без декларации, но с русским текстом
-  if (enc === 'utf-8' && /\uFFFD/.test(new TextDecoder('utf-8').decode(b.subarray(0, 500)))) enc = 'windows-1251';
+  const declared = readDeclaredEncoding(b);
+  const norm = declared ? (ENC_ALIASES[declared] || declared) : null;
+
+  // 1. Весь файл — валидный UTF-8. Для настоящего текста это надёжнее декларации.
   try {
-    return new TextDecoder(enc, { fatal: false }).decode(b);
-  } catch {
-    return new TextDecoder('utf-8').decode(b);
+    return new TextDecoder('utf-8', { fatal: true }).decode(b);
+  } catch { /* значит, действительно не UTF-8 */ }
+
+  // 2. Явно объявлена другая кодировка — доверяем ей.
+  if (norm && norm !== 'utf-8') {
+    try { return new TextDecoder(norm).decode(b); } catch { /* кодировка неизвестна */ }
   }
+
+  // 3. UTF-8 с единичными повреждёнными байтами: доля «замен» мала.
+  const lossy = new TextDecoder('utf-8').decode(b);
+  const bad = (lossy.match(/\uFFFD/g) || []).length;
+  if (bad > 0 && bad / Math.max(1, lossy.length) < 0.05) return lossy;
+
+  // 4. Частые кодировки русских FB2.
+  for (const enc of ['windows-1251', 'koi8-r', 'ibm866']) {
+    try { return new TextDecoder(enc).decode(b); } catch { /* ignore */ }
+  }
+
+  return lossy;
 }
 
 /** Читает FB2 из ArrayBuffer (.fb2 или .fb2.zip). */

@@ -44,6 +44,30 @@ export async function runSuite(env) {
   // ---------- кодировки ----------
   const text1251 = decodeXmlBuffer(await env.readBytes('sample1251.fb2'));
   ok('windows-1251 распознана', text1251.includes('Проверочная книга') && !text1251.includes('\uFFFD'), text1251.slice(0, 40));
+
+  // Регрессия: корректный UTF-8, у которого 500-й байт — начало символа,
+  // то есть срез [0:500] обрывается на середине последовательности.
+  const cutBuf = await env.readBytes('cut-utf8.fb2');
+  const cutByte = new Uint8Array(cutBuf)[499];
+  ok('фикстура: 500-й байт — начало многобайтового символа', cutByte >= 0xC2 && cutByte <= 0xDF, '0x' + cutByte.toString(16));
+  const cutText = decodeXmlBuffer(cutBuf);
+  ok('UTF-8 с обрывом на 500-м байте читается как UTF-8', cutText.includes('Проверочная книга') && !cutText.includes('\uFFFD'), JSON.stringify(cutText.slice(0, 60)));
+  eq('название из UTF-8 с обрывом', parseFb2(cutText).meta.title, 'Проверочная книга');
+
+  // Содержимое в UTF-8, а в декларации указана windows-1251.
+  const wrongDecl = decodeXmlBuffer(await env.readBytes('wrong-decl.fb2'));
+  ok('UTF-8 с неверной декларацией 1251 читается как UTF-8', wrongDecl.includes('Проверочная книга'), JSON.stringify(wrongDecl.slice(0, 70)));
+  eq('название при неверной декларации', parseFb2(wrongDecl).meta.title, 'Проверочная книга');
+
+  // windows-1251 без XML-декларации.
+  const noDecl = decodeXmlBuffer(await env.readBytes('nodecl-1251.fb2'));
+  ok('windows-1251 без декларации распознана', noDecl.includes('Проверочная книга'), JSON.stringify(noDecl.slice(0, 50)));
+
+  // UTF-8 с BOM.
+  const bomText = decodeXmlBuffer(await env.readBytes('bom-utf8.fb2'));
+  ok('UTF-8 с BOM: BOM отброшен', bomText.trimStart().startsWith('<?xml'), JSON.stringify(bomText.slice(0, 20)));
+  eq('название из файла с BOM', parseFb2(bomText).meta.title, 'Проверочная книга');
+
   const viaZip = await fb2TextFromBuffer(zipBuf);
   ok('fb2TextFromBuffer: zip распознан', viaZip.text.includes('Проверочная книга') && viaZip.innerName.endsWith('.fb2'));
 

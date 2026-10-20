@@ -38,7 +38,7 @@ def body():
         parts.append('</section>')
     return "\n".join(parts)
 
-def fb2():
+def fb2(pad=""):
     return f'''<?xml version="1.0" encoding="utf-8"?>
 <FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" xmlns:l="http://www.w3.org/1999/xlink">
 <description>
@@ -46,7 +46,7 @@ def fb2():
     <genre>sf</genre>
     <author><first-name>Иван</first-name><last-name>Тестов</last-name></author>
     <book-title>Проверочная книга</book-title>
-    <annotation><p>Аннотация для теста.</p></annotation>
+    <annotation><p>Аннотация для теста.{pad}</p></annotation>
     <date>2025</date>
     <coverpage><image l:href="#cover.png"/></coverpage>
     <lang>ru</lang>
@@ -76,4 +76,36 @@ with zipfile.ZipFile(os.path.join(HERE, "sample.fb2.zip"), "w", zipfile.ZIP_DEFL
 with zipfile.ZipFile(os.path.join(HERE, "sample-stored.zip"), "w", zipfile.ZIP_STORED) as z:
     z.writestr("book.fb2", xml.encode("utf-8"))
 
-print("ok:", sorted(f for f in os.listdir(HERE) if "sample" in f))
+# --- кодировки ---
+
+# 1. UTF-8, у которого 500-й байт попадает в середину многобайтового символа.
+#    Именно на этом ломалось определение кодировки по обрезанному фрагменту.
+cut = None
+# Нужно, чтобы 500-й байт оказался ПЕРВЫМ байтом многобайтового символа:
+# тогда срез [0:500] обрывается на середине и старый код видел «символ замены».
+for pad_ascii in (0, 1):
+    for n in range(0, 400):
+        candidate = fb2(pad=" " * pad_ascii + "Ж" * n).encode("utf-8")
+        if 0xC2 <= candidate[499] <= 0xDF:
+            cut = candidate
+            break
+    if cut:
+        break
+if cut is None:
+    raise SystemExit("не удалось подобрать смещение")
+open(os.path.join(HERE, "cut-utf8.fb2"), "wb").write(cut)
+
+# 2. Содержимое в UTF-8, но в декларации указана windows-1251 (частый брак конвертеров).
+open(os.path.join(HERE, "wrong-decl.fb2"), "wb").write(
+    fb2().replace('encoding="utf-8"', 'encoding="windows-1251"').encode("utf-8")
+)
+
+# 3. Windows-1251 без XML-декларации вообще.
+no_decl = fb2()
+no_decl = no_decl.split("\n", 1)[1]  # убираем строку <?xml ...?>
+open(os.path.join(HERE, "nodecl-1251.fb2"), "wb").write(no_decl.encode("windows-1251"))
+
+# 4. UTF-8 с BOM.
+open(os.path.join(HERE, "bom-utf8.fb2"), "wb").write(b"\xef\xbb\xbf" + fb2().encode("utf-8"))
+
+print("ok:", sorted(f for f in os.listdir(HERE) if f.endswith((".fb2", ".zip"))))
