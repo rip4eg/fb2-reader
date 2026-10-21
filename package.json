@@ -1,0 +1,20 @@
+{
+  "name": "fb2-reader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Читалка FB2 с синхронизацией позиции чтения через приватный репозиторий GitHub",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node tests/run-all.mjs",
+    "publish": "node tools/publish.mjs",
+    "fixtures": "python tests/make-fixtures.py"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
