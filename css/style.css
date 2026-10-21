@@ -128,11 +128,13 @@ label.field > span { display: block; font-size: .85rem; color: var(--muted); mar
 .notice.err { border-color: var(--danger); }
 
 /* ============ Библиотека ============ */
-.continue-card { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
-.continue-card .cover-mini { width: 56px; height: 84px; border-radius: 6px; object-fit: cover; background: var(--bg-soft); flex: none; }
-.continue-card .grow { flex: 1 1 220px; min-width: 0; }
-.continue-card .t { font-weight: 650; }
-.continue-card .a { color: var(--muted); font-size: .9rem; }
+.cont-list { display: flex; flex-direction: column; }
+.cont-row { display: flex; gap: .8rem; align-items: center; padding: .55rem 0; border-top: 1px solid var(--border); }
+.cont-row:first-child { border-top: 0; padding-top: .25rem; }
+.cont-row .cover-mini { width: 44px; height: 66px; border-radius: 6px; object-fit: cover; background: var(--bg-soft); flex: none; }
+.cont-row .grow { flex: 1 1 220px; min-width: 0; }
+.cont-row .t { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cont-row .a { color: var(--muted); font-size: .85rem; line-height: 1.35; }
 
 .grid {
   display: grid; gap: clamp(.6rem, 2vw, 1rem);

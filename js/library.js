@@ -35,7 +35,8 @@ export class Library {
     const lastId = store.lastBookId;
 
     node.append(this.header(stats, books.length));
-    if (lastId) node.append(this.continueCard(store.findBook(lastId), merged.get(lastId)));
+    const inProgress = this.inProgressBooks(merged);
+    if (inProgress.length) node.append(this.continueSection(inProgress));
     node.append(books.length ? this.filterRow(books.length, stats) : h('div'));
 
     const list = this.filtered();
@@ -65,22 +66,49 @@ export class Library {
     );
   }
 
-  continueCard(book, rec) {
-    if (!book) return h('div');
-    const img = h('img.cover-mini', { alt: '' });
-    this.loadCover(book, img);
-    const p = this.pagesInfo(book, rec);
-    return h('div.card.continue-card',
-      img,
-      h('div.grow',
-        h('div.hint', 'Продолжить чтение'),
-        h('div.t', book.title),
-        h('div.a', (book.author || 'Автор неизвестен')
-          + (rec ? ` · ${Math.round((rec.pct || 0) * 100)}%` : '')
-          + (p ? ` · стр. ${p.page} из ${p.total}, осталось ${p.left}` : '')
-          + (rec ? ` · ${fmtAgo(rec.at)}` : '')),
+  /**
+   * Все незаконченные книги: процент больше 1 и меньше 99.
+   * Верхняя граница — 99, потому что дочитанная книга иногда сохраняется как 99%,
+   * а не 100%, и не должна висеть здесь как незавершённая.
+   */
+  inProgressBooks(merged) {
+    const map = merged || this.store.merged();
+    const out = [];
+    for (const book of this.store.library.books) {
+      const rec = map.get(book.id);
+      if (!rec) continue;
+      const pct = rec.pct || 0;
+      if (pct > 0.01 && pct < 0.99) out.push({ book, rec });
+    }
+    out.sort((a, b) => new Date(b.rec.at).getTime() - new Date(a.rec.at).getTime());
+    return out;
+  }
+
+  continueSection(list) {
+    const rows = list.map(({ book, rec }) => {
+      const img = h('img.cover-mini', { alt: '' });
+      this.loadCover(book, img);
+      const p = this.pagesInfo(book, rec);
+      return h('div.cont-row',
+        img,
+        h('div.grow',
+          h('div.t', book.title),
+          h('div.a', (book.author || 'Автор неизвестен')
+            + ` · ${Math.round((rec.pct || 0) * 100)}%`
+            + (p ? ` · стр. ${p.page} из ${p.total}, осталось ${p.left}` : '')
+            + ` · ${fmtAgo(rec.at)}`),
+        ),
+        h('button.btn.sm.primary', { onclick: () => this.openBook(book.id) }, 'Читать'),
+      );
+    });
+
+    return h('div.card',
+      h('div.row', { style: { marginBottom: '.3rem' } },
+        h('strong', 'Продолжить чтение'),
+        h('span.sep'),
+        h('span.hint', list.length > 1 ? `незакончено книг: ${list.length}` : ''),
       ),
-      h('button.btn.primary', { onclick: () => this.openBook(book.id) }, 'Читать'),
+      h('div.cont-list', ...rows),
     );
   }
 

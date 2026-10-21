@@ -170,6 +170,26 @@ eq('название изменено', s1.library.books[0].title, 'Новое �
 await s2.refresh();
 eq('изменение видно на втором устройстве', s2.library.books[0].title, 'Новое название');
 
+// ---------- границы «читаю» / «прочитано» ----------
+{
+  const s = new Store();
+  s.library = { books: [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }] };
+  const at = '2026-01-01T00:00:00.000Z';
+  s.remote = new Map([['dev-x', {
+    deviceId: 'dev-x',
+    books: {
+      a: { pct: 0.005, at },
+      b: { pct: 0.5, at },
+      c: { pct: 0.99, at },
+      d: { pct: 0.995, at },
+    },
+  }]]);
+  const st = s.stats();
+  eq('статистика: 0.5% — ещё не начата', st.inProgress, 1);
+  eq('статистика: 99% и 99.5% — прочитаны', st.read, 2);
+  eq('статистика: неначатых', st.unread, 1);
+}
+
 // ---------- сохранение во время чтения (регрессия: таймер переносился при каждом изменении) ----------
 {
   store.setItem('fbr.device.v1', JSON.stringify({ id: 'dev-reading', name: 'Читаю непрерывно' }));

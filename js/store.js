@@ -487,6 +487,11 @@ export class Store extends EventTarget {
     this.emit('change');
   }
 
+  /**
+   * Счётчики для шапки библиотеки.
+   * Границы те же, что и у списка «Продолжить чтение»: дочитанной считаем книгу
+   * от 99% (иногда вместо 100% сохраняется 99%), начатой — от 1%.
+   */
   stats() {
     const merged = this.merged();
     const books = this.library.books;
@@ -494,8 +499,8 @@ export class Store extends EventTarget {
     for (const b of books) {
       const p = merged.get(b.id);
       if (!p) continue;
-      if (p.pct >= 0.995) read++;
-      else if (p.pct > 0.005) inProgress++;
+      if (p.pct >= 0.99) read++;
+      else if (p.pct > 0.01) inProgress++;
     }
     return { total: books.length, read, inProgress, unread: books.length - read - inProgress };
   }

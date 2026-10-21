@@ -244,6 +244,40 @@ try {
     eq('скан: состояние восстановлено', app.store.library.books.length, before);
   }
 
+  // «Продолжить чтение»: список всех незаконченных книг
+  {
+    app.rerender();
+    await tick(10);
+    await app.store.setProgress(book.id, { i: 5, o: 0 }, 0.4, { immediate: true });
+    app.rerender();
+    await tick(10);
+    let rows = window.document.querySelectorAll('.cont-row');
+    ok('продолжение: книга на 40% попала в список', rows.length === 1, 'строк: ' + rows.length);
+    ok('продолжение: видно процент и страницы', /40%/.test(root.textContent) && /стр\. \d+ из \d+/.test(root.textContent));
+
+    await app.store.setProgress(book.id, { i: 5, o: 0 }, 0.995, { immediate: true });
+    app.rerender();
+    await tick(10);
+    rows = window.document.querySelectorAll('.cont-row');
+    ok('продолжение: дочитанная книга (99.5%) убрана из списка', rows.length === 0, 'строк: ' + rows.length);
+
+    await app.store.setProgress(book.id, { i: 5, o: 0 }, 0.99, { immediate: true });
+    app.rerender();
+    await tick(10);
+    rows = window.document.querySelectorAll('.cont-row');
+    ok('продолжение: 99% тоже считается дочитанной', rows.length === 0, 'строк: ' + rows.length);
+
+    await app.store.setProgress(book.id, { i: 5, o: 0 }, 0.005, { immediate: true });
+    app.rerender();
+    await tick(10);
+    rows = window.document.querySelectorAll('.cont-row');
+    ok('продолжение: почти неначатая книга (0.5%) скрыта', rows.length === 0, 'строк: ' + rows.length);
+
+    await app.store.setProgress(book.id, { i: 5, o: 0 }, 0.4, { immediate: true });
+    app.rerender();
+    await tick(10);
+  }
+
   // меню книги
   const menuBtn = window.document.querySelector('.book .menu-btn');
   menuBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
